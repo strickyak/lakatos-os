@@ -73,6 +73,7 @@ apps: lakat
 	$(LAKAT) compile -req $(REQ) -title "LED Clock" -o build/subapps/led-clock.sapp subapps/led-clock/led-clock.lgolf
 	$(LAKAT) compile -req $(REQ) -title "Life 4x4" -o build/subapps/life44.sapp subapps/life44/life44.lgolf
 	$(LAKAT) compile -req $(REQ) -title "Ants" -o build/subapps/ants.sapp subapps/ants/ants.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Color Slice" -o build/subapps/color-slice.sapp subapps/color-slice/color-slice.lgolf
 	$(PYTHON) tools/build_lapp.py --req $(REQ)
 
 lakatos: apps

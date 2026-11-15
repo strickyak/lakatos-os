@@ -1,0 +1,108 @@
+package main
+
+// Color Slice Sub-App (color-slice.sapp)
+// Draws vibrant radial pie-slices starting at the center (160, 120) and
+// growing outward to the edge of the screen with random saturated colors,
+// repeating for 3 seconds (3000 ms) to turn the screen into color slices.
+
+const CX = 160
+const CY = 120
+const MAX_R = 210
+
+// Generates a vivid, high-saturation RGB565 color around the color wheel
+func randomVividColor() int {
+	hue := int(os_rand(360))
+	region := hue / 60
+	rem := (hue % 60) * 255 / 60
+
+	r := 0
+	g := 0
+	b := 0
+	if region == 0 {
+		r = 255
+		g = rem
+		b = 0
+	} else if region == 1 {
+		r = 255 - rem
+		g = 255
+		b = 0
+	} else if region == 2 {
+		r = 0
+		g = 255
+		b = rem
+	} else if region == 3 {
+		r = 0
+		g = 255 - rem
+		b = 255
+	} else if region == 4 {
+		r = rem
+		g = 0
+		b = 255
+	} else {
+		r = 255
+		g = 0
+		b = 255 - rem
+	}
+
+	return rgb565(r, g, b)
+}
+
+func drawSliceAtRadius(ca0 float32, sa0 float32, caMid float32, saMid float32, ca1 float32, sa1 float32, r float32, col int) {
+	x0 := CX + int(round(ca0*r))
+	y0 := CY + int(round(sa0*r))
+	xm := CX + int(round(caMid*r))
+	ym := CY + int(round(saMid*r))
+	x1 := CX + int(round(ca1*r))
+	y1 := CY + int(round(sa1*r))
+
+	os_tft_fill_triangle(CX, CY, x0, y0, xm, ym, col)
+	os_tft_fill_triangle(CX, CY, xm, ym, x1, y1, col)
+}
+
+func main() {
+	curAng := float32(int(os_rand(360)))
+	elapsed := 0
+
+	for elapsed < 3000 {
+		if os_serial_available() > 0 {
+			ch := os_serial_read()
+			if ch == 'q' || ch == 'Q' || ch == 3 {
+				os_exit(0)
+			}
+		}
+		clicked, _, _ := os_read_click()
+		if clicked != 0 {
+			os_exit(0)
+		}
+
+		// Pick a random slice span (12..26 degrees); occasionally jump to a new angle
+		span := float32(12 + int(os_rand(15)))
+		if os_rand(4) == 0 {
+			curAng = float32(int(os_rand(360)))
+		}
+		a0 := curAng * DEG_TO_RAD
+		aMid := (curAng + span*0.5) * DEG_TO_RAD
+		a1 := (curAng + span) * DEG_TO_RAD
+		curAng = curAng + span - 1.0
+		if curAng >= 360.0 {
+			curAng = curAng - 360.0
+		}
+
+		ca0 := cos(a0)
+		sa0 := sin(a0)
+		caMid := cos(aMid)
+		saMid := sin(aMid)
+		ca1 := cos(a1)
+		sa1 := sin(a1)
+		col := randomVividColor()
+
+		// Grow the slice outward from the center (160, 120) to the screen edge
+		for step := 1; step <= 5; step = step + 1 {
+			r := float32(step * (MAX_R / 5))
+			drawSliceAtRadius(ca0, sa0, caMid, saMid, ca1, sa1, r, col)
+			os_delay_ms(8)
+			elapsed = elapsed + 8
+		}
+	}
+	os_exit(0)
+}

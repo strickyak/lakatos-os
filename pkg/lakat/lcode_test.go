@@ -1688,6 +1688,43 @@ func TestAntsSubApp(t *testing.T) {
 	}
 }
 
+func TestColorSliceSubApp(t *testing.T) {
+	srcBytes, err := os.ReadFile("../../subapps/color-slice/color-slice.lgolf")
+	if err != nil {
+		t.Fatalf("ReadFile color-slice.lgolf: %v", err)
+	}
+	sapp, asmText, err := CompileToLapp("color-slice", string(srcBytes))
+	if err != nil {
+		t.Fatalf("CompileToLapp color-slice.lgolf: %v\nASM:\n%s", err, asmText)
+	}
+	vm, err := NewVM(sapp)
+	if err != nil {
+		t.Fatalf("NewVM: %v", err)
+	}
+	vm.MaxInstructions = 8000000
+
+	if _, err := vm.Run(); err != nil {
+		t.Fatalf("VM Run: %v", err)
+	}
+	if vm.Running {
+		t.Fatalf("color-slice sub-app did not exit cleanly after 3s")
+	}
+
+	// Verify colored slices covered most of the screen
+	coloredPixels := 0
+	for y := 0; y < 240; y++ {
+		for x := 0; x < 320; x++ {
+			if vm.Screen[y][x] != 0x0000 {
+				coloredPixels++
+			}
+		}
+	}
+	if coloredPixels < 40000 {
+		t.Fatalf("expected color-slice to paint >= 40000 pixels, got %d", coloredPixels)
+	}
+}
+
+
 
 
 
