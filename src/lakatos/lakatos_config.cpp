@@ -142,7 +142,7 @@ static char   gSerialNo[32]    = "";
 static char   gShUrl[96]       = "http://pizga.net:1908/";
 static char   gShPass[64]      = "";  // Never stored in source code; loaded from NVS
 static bool   gTouchSpotEnabled = false;
-static int    gCornerSize      = 12;
+static int    gCornerSize      = 24;
 
 static int    gActivityMode    = LAKATOS_MODE_ACTIVE;
 static char   gAmbientApp[32]  = "gallery";
@@ -235,7 +235,7 @@ void initLakatosConfig() {
   prefs.begin("cyd_cfg", true);
   gAutoBright = prefs.getBool("autoB", true);
   gManualBrightPct = constrain((int)prefs.getInt("manB", 85), 5, 100);
-  gCornerSize = snapCornerSize((int)prefs.getInt("cornerSz", 12));
+  gCornerSize = snapCornerSize((int)prefs.getInt("cornerSz", 24));
   String savedIata = prefs.getString("iata", "SFO");
   String savedDev  = prefs.getString("devName", "test");
   String savedSer  = prefs.getString("serialNo", "");
@@ -565,6 +565,15 @@ static void drawKbGrid(int page) {
 int lakatosPromptKeyboard(const char* title, char* buf, size_t maxLen,
                           bool allowCtrlC) {
   if (!buf || maxLen == 0) return 0;
+  struct CornerExitSuspendGuard {
+    bool prev;
+    CornerExitSuspendGuard() : prev(lakatosGetCornerExitEnabled()) {
+      lakatosSetCornerExitEnabled(false);
+    }
+    ~CornerExitSuspendGuard() {
+      lakatosSetCornerExitEnabled(prev);
+    }
+  } cornerGuard;
   String text = String(buf);
   int page = 0;
 
@@ -628,22 +637,21 @@ int lakatosPromptKeyboard(const char* title, char* buf, size_t maxLen,
           (lastPressMs == 0 || (uint32_t)(now - lastPressMs) >= 180u)) {
         wasDown = true;
         lastPressMs = now;
-        if (t.y <= 25) {
-          if (t.x <= 60) {
-            lakatosWaitTouchRelease();
-            return 0;  // Cancelled
-          }
-          if (allowCtrlC && t.x >= 62 && t.x <= 112) {
-            lakatosWaitTouchRelease();
-            return -1;  // ^C
-          }
-          if (t.x >= 232) {
-            strncpy(buf, text.c_str(), maxLen - 1);
-            buf[maxLen - 1] = '\0';
-            lakatosWaitTouchRelease();
-            return 1;
-          }
-        } else if (t.y >= 26 && t.y <= 60) {
+        if (t.y <= 34 && t.x <= 60) {
+          lakatosWaitTouchRelease();
+          return 0;  // Cancelled
+        }
+        if (allowCtrlC && t.y <= 34 && t.x >= 62 && t.x <= 112) {
+          lakatosWaitTouchRelease();
+          return -1;  // ^C
+        }
+        if (t.y <= 25 && t.x >= 232) {
+          strncpy(buf, text.c_str(), maxLen - 1);
+          buf[maxLen - 1] = '\0';
+          lakatosWaitTouchRelease();
+          return 1;
+        }
+        if (t.y >= 26 && t.y <= 60) {
           if (t.x >= 250 && text.length() > 0) {
             text.remove(text.length() - 1);
             drawKbInputBox(text);
@@ -701,8 +709,8 @@ static void drawCrosshair(int x, int y, uint16_t color, const char* label) {
   tft.drawFastHLine(x - 22, y, 44, color);
   tft.drawFastVLine(x, y - 22, 44, color);
   tft.setTextColor(color, TFT_BLACK);
-  tft.setTextDatum(TC_DATUM);
-  tft.drawString(label, x, (y < 120) ? (y + 22) : (y - 34), 2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString(label, 160, 125, 2);
 }
 
 static void runTouchCalibrationModal() {
@@ -724,19 +732,28 @@ static void runTouchCalibrationModal() {
       drawCrosshair(tx[step], ty[step], cols[step], labels[step]);
     }
 
-    while (lakatosReadTouch().touched) {
-      updateLakatosConfigBackground();
-      delay(20);
-    }
+    lakatosWaitTouchRelease();
     while (true) {
       updateLakatosConfigBackground();
       if (lakatosShouldExitApp()) return;
       LakatosTouchSample t = lakatosReadTouch();
       if (t.touched) {
-        rawX[step] = t.rawX;
-        rawY[step] = t.rawY;
+        long sumX = t.rawX;
+        long sumY = t.rawY;
+        int  cnt  = 1;
+        for (int s = 0; s < 5; s++) {
+          delay(12);
+          LakatosTouchSample t2 = lakatosReadTouch();
+          if (t2.touched) {
+            sumX += t2.rawX;
+            sumY += t2.rawY;
+            cnt++;
+          }
+        }
+        rawX[step] = (int)(sumX / cnt);
+        rawY[step] = (int)(sumY / cnt);
         lakatosSetRgbLed(false, true, false, 80);
-        delay(220);
+        lakatosWaitTouchRelease();
         break;
       }
       delay(15);
@@ -751,6 +768,8 @@ static void runTouchCalibrationModal() {
   gCal.vAtY1  = gCal.swapXY ? (float)rawX[0] : (float)rawY[0];
   gCal.vAtY2  = gCal.swapXY ? (float)rawX[2] : (float)rawY[2];
   saveTouchCalibrationToNvs();
+  Serial.printf("[Lakatos] Saved touch calibration: swapXY=%d u=[%.0f..%.0f] v=[%.0f..%.0f]\r\n",
+                gCal.swapXY ? 1 : 0, gCal.uAtX1, gCal.uAtX2, gCal.vAtY1, gCal.vAtY2);
 }
 
 // ---------------------------------------------------------------------------
@@ -1824,7 +1843,8 @@ void runLakatosUpdatesScreen() {
       if (!wasDown && (now - lastRel > 100)) {
         wasDown = true;
         int cs = lakatosGetCornerSize();
-        if (t.x < cs && t.y < cs) {
+        int hitSz = (cs < 24) ? 24 : cs;
+        if (t.x < hitSz && t.y <= hitSz) {
           lakatosSetInConfigScreen(false);
           return;
         } else if (t.y <= 25 && t.x >= 244) {
@@ -2082,7 +2102,8 @@ void runLakatosConfigScreen(bool startInCalibration) {
       } else if (!wasDown && (now - lastRel > 50)) {
         wasDown = true;
         int cs = lakatosGetCornerSize();
-        if (t.x < cs && t.y < cs) {
+        int hitSz = (cs < 24) ? 24 : cs;
+        if (t.x < hitSz && t.y <= hitSz) {
           lakatosDevLogf("Button: CONFIG -> EXIT X (%d,%d)", t.x, t.y);
           lakatosSetInConfigScreen(false);
           return;  // Top-left X -> Exit Config back to YakFace Home page
@@ -2294,7 +2315,8 @@ void runLakatosModeScreen() {
       if (!wasDown && (now - lastRel > 100)) {
         wasDown = true;
         int cs = lakatosGetCornerSize();
-        if (t.x < cs && t.y < cs) {
+        int hitSz = (cs < 24) ? 24 : cs;
+        if (t.x < hitSz && t.y <= hitSz) {
           lakatosSetInConfigScreen(false);
           return;
         } else if (t.y >= 28 && t.y <= 62) {

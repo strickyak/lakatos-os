@@ -2049,6 +2049,12 @@ void lakatosPollSerialFuse() {
       Serial.read();
       continue;
     }
+    if (pk == 3) {
+      Serial.read();
+      gAppExitedByUser = true;
+      gPleaseExitApp = true;
+      continue;
+    }
     if (pk == '@') {
       String line = Serial.readStringUntil('\n');
       line.trim();
@@ -2064,6 +2070,9 @@ void lakatosPollSerialFuse() {
         handleSerialCommandLine(line);
       }
       continue;
+    }
+    if (lakatosGetActivityMode() != LAKATOS_MODE_ACTIVE) {
+      gPleaseExitApp = true;
     }
     break;
   }
@@ -2222,6 +2231,11 @@ static void handleSerialCommandLine(const String& line) {
       runLakatosConfigScreen(false);
       refreshActiveScreen();
     }
+  } else if (line == "calibrate" || line == "cal") {
+    if (!gInConfigScreen) {
+      runLakatosConfigScreen(true);
+      refreshActiveScreen();
+    }
   } else if (line == "df") {
     LakatosStorageInfo stInfo;
     memset(&stInfo, 0, sizeof(stInfo));
@@ -2293,7 +2307,7 @@ static void handleSerialCommandLine(const String& line) {
     }
     Serial.printf("Developer Mode: %s\r\n", lakatosGetDeveloperMode() ? "ON" : "OFF");
   } else if (line == "help" || line == "?") {
-    Serial.println("Commands: info | df | storage | ls [path] | run <path> | preview <path> | cp <src> <dst> | netpass <pw> | neturl <url> | devname <name> | serial <sn> | airport <iata> | wifi <ssid> [pw] | config | dev [on|off]");
+    Serial.println("Commands: info | df | storage | ls [path] | run <path> | preview <path> | cp <src> <dst> | netpass <pw> | neturl <url> | devname <name> | serial <sn> | airport <iata> | wifi <ssid> [pw] | config | calibrate | dev [on|off]");
   } else {
     Serial.printf("Unknown command '%s'. Type 'help' for commands.\r\n", line.c_str());
   }
@@ -2456,9 +2470,10 @@ void loop() {
       return;
     }
 
-    // 1. Top-right NE Menu Wedge
+    // 1. Top-right NE Menu Wedge (always at least 24x24 in the 24px header bar)
     int cornerSz = lakatosGetCornerSize();
-    if (ty < cornerSz && tx >= 320 - cornerSz) {
+    int hitSz = (cornerSz < 24) ? 24 : cornerSz;
+    if (ty <= hitSz && tx >= 320 - hitSz) {
       lakatosDevLogf("Button: MENU (%d,%d)", tx, ty);
       gHomeMenuOpen = true;
       drawHomeHeaderBar();
