@@ -481,6 +481,7 @@ type lakatosFileHandle struct {
 	writable bool
 	dirty    bool
 	wroteAny bool
+	writeErr bool
 }
 
 func (fh *lakatosFileHandle) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadResponse) error {
@@ -519,7 +520,7 @@ func (fh *lakatosFileHandle) Write(ctx context.Context, req *fuse.WriteRequest, 
 	fh.mu.Lock()
 	defer fh.mu.Unlock()
 
-	const maxChunk = 512
+	const maxChunk = 1024
 	data := req.Data
 	offset := uint32(req.Offset)
 	written := 0
@@ -534,9 +535,14 @@ func (fh *lakatosFileHandle) Write(ctx context.Context, req *fuse.WriteRequest, 
 			mode = "W"
 		}
 		if err := fh.node.fs.bridge.FuseWriteChunk(fh.node.vfsPath, mode, offset, data[written:written+chunk]); err != nil {
+			fh.writeErr = true
+			fh.dirty = false
+			fh.node.fs.deleteEntryCache(fh.node.vfsPath)
+			fh.node.fs.invalidateDir(path.Dir(fh.node.vfsPath))
 			return fuseErrno(err)
 		}
 		fh.wroteAny = true
+		fh.writeErr = false
 		fh.dirty = true
 		written += chunk
 		offset += uint32(chunk)
@@ -559,7 +565,7 @@ func (fh *lakatosFileHandle) Write(ctx context.Context, req *fuse.WriteRequest, 
 func (fh *lakatosFileHandle) Flush(ctx context.Context, req *fuse.FlushRequest) error {
 	fh.mu.Lock()
 	defer fh.mu.Unlock()
-	if !fh.dirty {
+	if !fh.dirty || fh.writeErr {
 		return nil
 	}
 	if err := fh.node.fs.bridge.FuseCommit(fh.node.vfsPath); err != nil {
@@ -576,7 +582,7 @@ func (fh *lakatosFileHandle) Flush(ctx context.Context, req *fuse.FlushRequest) 
 func (fh *lakatosFileHandle) Release(ctx context.Context, req *fuse.ReleaseRequest) error {
 	fh.mu.Lock()
 	defer fh.mu.Unlock()
-	if fh.dirty {
+	if fh.dirty && !fh.writeErr {
 		_ = fh.node.fs.bridge.FuseCommit(fh.node.vfsPath)
 		fh.dirty = false
 		fh.node.fs.invalidateDir(path.Dir(fh.node.vfsPath))

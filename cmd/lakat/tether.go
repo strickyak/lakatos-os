@@ -392,7 +392,7 @@ func (b *TetherBridge) PushBytes(srcBaseName string, data []byte, vfsDest string
 		}
 	}
 
-	const maxChunk = 512
+	const maxChunk = 1024
 	if len(data) == 0 {
 		if err := b.FuseWriteChunk(targetPath, "W", 0, nil); err != nil {
 			return targetPath, err
@@ -644,9 +644,17 @@ func cmdTether(args []string) {
 			time.Sleep(20 * time.Millisecond)
 		}
 
+		stdinIsTerm := false
+		if fi, err := os.Stdin.Stat(); err == nil && (fi.Mode()&os.ModeCharDevice) != 0 {
+			stdinIsTerm = true
+		}
+
+		if len(fs.Args()) > 0 || !stdinIsTerm {
+			_ = bridge.WaitUntilReady("/flash", 15*time.Second)
+		}
+
 		// Send any positional arguments as initial commands
 		if len(fs.Args()) > 0 {
-			_ = bridge.WaitUntilReady("/flash", 5*time.Second)
 			initCmds := fs.Args()
 			if len(initCmds) > 1 {
 				switch strings.ToLower(initCmds[0]) {
@@ -661,18 +669,16 @@ func cmdTether(args []string) {
 					os.Exit(0)
 				}
 				_ = bridge.WriteLine(initCmd)
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(150 * time.Millisecond)
 			}
 		}
 
 		// If positional commands were supplied with -drain and stdin is a terminal,
 		// drain and exit without waiting for interactive stdin EOF.
-		if len(fs.Args()) > 0 && *drain > 0 {
-			if fi, err := os.Stdin.Stat(); err == nil && (fi.Mode()&os.ModeCharDevice) != 0 {
-				time.Sleep(*drain)
-				runCleanup()
-				os.Exit(0)
-			}
+		if len(fs.Args()) > 0 && *drain > 0 && stdinIsTerm {
+			time.Sleep(*drain)
+			runCleanup()
+			os.Exit(0)
 		}
 
 		reader := bufio.NewReader(os.Stdin)
@@ -680,6 +686,17 @@ func cmdTether(args []string) {
 			line, err := reader.ReadString('\n')
 			if len(line) > 0 {
 				trimmed := strings.TrimSpace(line)
+				if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+					if err != nil {
+						if *drain > 0 {
+							time.Sleep(*drain)
+							runCleanup()
+							os.Exit(0)
+						}
+						return
+					}
+					continue
+				}
 				if strings.EqualFold(trimmed, "bye") {
 					runCleanup()
 					fmt.Fprintln(os.Stderr, "[tether exiting]")
@@ -689,8 +706,10 @@ func cmdTether(args []string) {
 					fmt.Fprintln(os.Stderr, "[tether: type 'bye' (or press ^C) to shut down lakat tether]")
 					continue
 				}
-				if werr := bridge.WriteLine(line); werr != nil {
+				if werr := bridge.WriteLine(trimmed); werr != nil {
 					fmt.Fprintf(os.Stderr, "[tether write error: %v]\n", werr)
+				} else if !stdinIsTerm {
+					time.Sleep(200 * time.Millisecond)
 				}
 			}
 			if err != nil {

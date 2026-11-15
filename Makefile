@@ -1,12 +1,13 @@
 PIO ?= .venv/bin/python -m platformio
 PYTHON ?= python3
 LAKAT ?= ./build/lakat
+SECRETS ?= /etc/lakatos/secrets
 REQ ?= $(shell date +%s)
 
 MKLITTLEFS ?= $(HOME)/.platformio/packages/tool-mklittlefs/mklittlefs
 BOOT_APP0 ?= $(HOME)/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin
 
-.PHONY: all push lakatos build-lakatos web-installer lakat apps demo1 demo2 build-demo1 build-demo2 monitor clean
+.PHONY: all push lakatos build-lakatos web-installer lakat apps demo1 demo2 build-demo1 build-demo2 monitor cf wipe clean
 
 all:
 	@echo "================================================================"
@@ -14,6 +15,7 @@ all:
 	@echo "================================================================"
 	@echo "  make push           Build and push: lakatos & apps"
 	@echo "  make lakatos        Build LCode .lapp apps, compile & upload Lakatos OS"
+	@echo "  make cf             Write config from $(SECRETS) to attached CYD"
 	@echo "  make build-lakatos  Build LCode .lapp apps & compile Lakatos OS"
 	@echo "  make web-installer  Build ready-to-host WebSerial installer in build/web-installer/"
 	@echo "  make lakat          Build ./build/lakat (compiler, asm, dis, emulator, uploader, tether)"
@@ -23,6 +25,7 @@ all:
 	@echo "  make build-demo1    Compile demo1 without uploading"
 	@echo "  make build-demo2    Compile demo2 without uploading"
 	@echo "  make monitor        Open 115200 baud serial monitor"
+	@echo "  make wipe           Erase all flash (kernel, NVS config, /flash) on CYD"
 	@echo "  make clean          Clean PlatformIO and .lapp build artifacts"
 	@echo "================================================================"
 
@@ -118,6 +121,12 @@ build-demo2:
 
 monitor:
 	$(PIO) device monitor -b 115200
+
+cf: lakat
+	$(LAKAT) tether -mount="" -drain=2s < $(SECRETS)
+
+wipe:
+	$(PIO) run -e lakatos -t erase
 
 build/superhighway-server:
 	go build -o build/superhighway-server  ../superhighway/cmd/superhighway-server/

@@ -827,8 +827,9 @@ static void refreshHomeApps() {
 
   // Priority 2: /net/apps/*.lapp
   bool wifiOk = lakatosWifiIsConnected();
-  gHomeScannedWifi = wifiOk;
-  if (wifiOk && strlen(lakatosGetSuperhighwayPassword()) > 0) {
+  bool hasNetPass = (strlen(lakatosGetSuperhighwayPassword()) > 0);
+  gHomeScannedWifi = (wifiOk && hasNetPass);
+  if (wifiOk && hasNetPass) {
     collectHomeAppsFromDir("/net/apps", APP_SRC_NET);
   }
 
@@ -1812,11 +1813,6 @@ static size_t fuseBase64Decode(const char* in, size_t inLen, uint8_t* out, size_
   return outLen;
 }
 
-static String   gFuseNetWritePath;
-static uint8_t* gFuseNetWriteBuf   = nullptr;
-static size_t   gFuseNetWriteCap   = 0;
-static size_t   gFuseNetWriteLen   = 0;
-static bool     gFuseNetWriteDirty = false;
 static bool     gShellNeedsRefresh = false;
 
 static void handleFuseCommand(const String& line) {
@@ -1939,40 +1935,13 @@ static void handleFuseCommand(const String& line) {
     size_t decLen = fuseBase64Decode(b64.c_str(), b64.length(), raw, maxDec);
 
     if (strncmp(path.c_str(), "/net/", 5) == 0) {
-      if (mode == "W" || gFuseNetWritePath != path) {
-        gFuseNetWritePath  = path;
-        gFuseNetWriteLen   = 0;
-        gFuseNetWriteDirty = true;
-      }
-      size_t needed = (size_t)offset + decLen;
-      if (needed > 98304) {
-        free(raw);
-        Serial.printf("@@FUSE %s ERR EFBIG\r\n", seq.c_str());
-        return;
-      }
-      if (needed > gFuseNetWriteCap) {
-        size_t nextCap = (needed < 4096) ? 4096 : needed;
-        uint8_t* nb = (uint8_t*)realloc(gFuseNetWriteBuf, nextCap);
-        if (!nb) {
-          free(raw);
-          Serial.printf("@@FUSE %s ERR ENOMEM\r\n", seq.c_str());
-          return;
-        }
-        if (nextCap > gFuseNetWriteCap) {
-          memset(nb + gFuseNetWriteCap, 0, nextCap - gFuseNetWriteCap);
-        }
-        gFuseNetWriteBuf = nb;
-        gFuseNetWriteCap = nextCap;
-      }
-      if (decLen > 0) {
-        memcpy(gFuseNetWriteBuf + offset, raw, decLen);
-      }
-      if (needed > gFuseNetWriteLen) {
-        gFuseNetWriteLen = needed;
-      }
-      gFuseNetWriteDirty = true;
+      bool ok = lakatosNetPutWrite(path.c_str(), mode.c_str(), offset, raw, decLen);
       free(raw);
-      Serial.printf("@@FUSE %s OK %u\r\n", seq.c_str(), (unsigned)decLen);
+      if (ok) {
+        Serial.printf("@@FUSE %s OK %u\r\n", seq.c_str(), (unsigned)decLen);
+      } else {
+        Serial.printf("@@FUSE %s ERR %s\r\n", seq.c_str(), lakatosFsLastError());
+      }
       return;
     }
 
@@ -1992,18 +1961,8 @@ static void handleFuseCommand(const String& line) {
     }
   } else if (op == "COMMIT") {
     bool ok = true;
-    if (strncmp(args.c_str(), "/net/", 5) == 0 && gFuseNetWriteDirty && gFuseNetWritePath == args) {
-      ok = lakatosFsWrite(args.c_str(),
-                          gFuseNetWriteBuf ? gFuseNetWriteBuf : (const uint8_t*)"",
-                          gFuseNetWriteLen);
-      if (gFuseNetWriteBuf) {
-        free(gFuseNetWriteBuf);
-        gFuseNetWriteBuf = nullptr;
-      }
-      gFuseNetWriteCap   = 0;
-      gFuseNetWriteLen   = 0;
-      gFuseNetWriteDirty = false;
-      gFuseNetWritePath  = "";
+    if (strncmp(args.c_str(), "/net/", 5) == 0) {
+      ok = lakatosNetPutCommit(args.c_str());
     }
     gShellNeedsRefresh = true;
     if (ok) {
@@ -2079,15 +2038,11 @@ void lakatosPollSerialFuse() {
 }
 
 static void refreshShellOrMarkDirty() {
-  if (gInConfigScreen) {
-    gShellNeedsRefresh = true;
-  } else {
-    refreshActiveScreen();
-  }
+  gShellNeedsRefresh = true;
 }
 
 static void handleSerialCommandLine(const String& line) {
-  if (line.length() == 0) return;
+  if (line.length() == 0 || line.startsWith("#")) return;
 
   if (line.startsWith("@FUSE ")) {
     handleFuseCommand(line);
@@ -2319,7 +2274,7 @@ static void handleSerialCommand() {
 
 void setup() {
   esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
-  Serial.setRxBufferSize(1024);
+  Serial.setRxBufferSize(4096);
   Serial.begin(115200);
   delay(80);
   Serial.println("\r\n================================================");
@@ -2345,10 +2300,6 @@ void setup() {
 
   loadTouchCalibrationFromNvs();
   xTaskCreatePinnedToCore(touchScannerTaskCore0, "lak_touch", 2560, nullptr, 1, nullptr, 0);
-
-  if (!loadTouchCalibrationFromNvs()) {
-    runLakatosConfigScreen(true);
-  }
 
   gScreenMode   = SCREEN_HOME;
   gHomeMenuOpen = false;

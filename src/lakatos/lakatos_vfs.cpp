@@ -654,12 +654,212 @@ int32_t lakatosFsRead(const char* path, uint32_t offset, void* buf, size_t len) 
   return -1;
 }
 
+static WiFiClient gNetPutClient;
+static bool       gNetPutOpen    = false;
+static String     gNetPutPath    = "";
+static String     gNetPutSubPath = "";
+static size_t     gNetPutBytes   = 0;
+
+static bool parseShUrlHostPortPrefix(String& outHost, uint16_t& outPort, String& outPrefix) {
+  String u = String(lakatosGetSuperhighwayUrl());
+  u.trim();
+  if (u.startsWith("http://")) {
+    u.remove(0, 7);
+  } else if (u.startsWith("https://")) {
+    u.remove(0, 8);
+  }
+  int slash = u.indexOf('/');
+  String hostPort = (slash >= 0) ? u.substring(0, slash) : u;
+  outPrefix = (slash >= 0) ? u.substring(slash) : "";
+  while (outPrefix.endsWith("/")) {
+    outPrefix.remove(outPrefix.length() - 1);
+  }
+  int colon = hostPort.indexOf(':');
+  if (colon >= 0) {
+    outHost = hostPort.substring(0, colon);
+    long p = hostPort.substring(colon + 1).toInt();
+    outPort = (p > 0 && p <= 65535) ? (uint16_t)p : 80;
+  } else {
+    outHost = hostPort;
+    outPort = 80;
+  }
+  outHost.trim();
+  return outHost.length() > 0;
+}
+
+static bool writeAllToClient(WiFiClient& c, const uint8_t* data, size_t len, uint32_t timeoutMs = 8000) {
+  size_t sent = 0;
+  uint32_t lastProgressMs = millis();
+  while (sent < len) {
+    size_t chunk = len - sent;
+    if (chunk > 1024) chunk = 1024;
+    int w = c.write(data + sent, chunk);
+    if (w > 0) {
+      sent += (size_t)w;
+      lastProgressMs = millis();
+    } else {
+      if (!c.connected() || (uint32_t)(millis() - lastProgressMs) >= timeoutMs) {
+        return false;
+      }
+      delay(2);
+    }
+  }
+  return true;
+}
+
+static int readNetPutResponseCode(WiFiClient& c, uint32_t timeoutMs) {
+  uint32_t startMs = millis();
+  String statusLine = "";
+  while ((uint32_t)(millis() - startMs) < timeoutMs) {
+    while (c.available() > 0) {
+      int ch = c.read();
+      if (ch < 0) break;
+      if (ch == '\n') {
+        statusLine.trim();
+        if (statusLine.startsWith("HTTP/")) {
+          int sp1 = statusLine.indexOf(' ');
+          if (sp1 > 0) {
+            return statusLine.substring(sp1 + 1).toInt();
+          }
+        }
+        return -1;
+      }
+      if (statusLine.length() < 120) {
+        statusLine += (char)ch;
+      }
+    }
+    if (!c.connected() && c.available() <= 0) break;
+    delay(2);
+  }
+  return -1;
+}
+
+void lakatosNetPutAbort() {
+  if (gNetPutOpen || gNetPutClient.connected()) {
+    gNetPutClient.stop();
+  }
+  gNetPutOpen    = false;
+  gNetPutPath    = "";
+  gNetPutSubPath = "";
+  gNetPutBytes   = 0;
+}
+
+bool lakatosNetPutBegin(const char* path) {
+  gLastVfsErr = "EIO";
+  lakatosNetPutAbort();
+
+  String subPath;
+  if (parseVfsPath(path, subPath) != VFS_SH) return false;
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  String host, prefix;
+  uint16_t port = 80;
+  if (!parseShUrlHostPortPrefix(host, port, prefix)) return false;
+
+  gNetPutClient.setNoDelay(true);
+  if (!gNetPutClient.connect(host.c_str(), port, 6000)) {
+    gLastVfsErr = "EIO";
+    return false;
+  }
+
+  String reqPath = prefix + urlEncodePath(subPath);
+  String user = String(lakatosGetDeviceName()) + "/" + String(lakatosGetSerialNumber());
+  String pass = String(lakatosGetSuperhighwayPassword());
+  String authHdr = "";
+  if (user.length() > 0 || pass.length() > 0) {
+    authHdr = "Authorization: Basic " + base64::encode(user + ":" + pass) + "\r\n";
+  }
+
+  String hdr = "PUT " + reqPath + " HTTP/1.1\r\n"
+               "Host: " + host + ":" + String(port) + "\r\n" +
+               authHdr +
+               "Content-Type: application/octet-stream\r\n"
+               "Transfer-Encoding: chunked\r\n"
+               "Connection: close\r\n\r\n";
+
+  if (!writeAllToClient(gNetPutClient, (const uint8_t*)hdr.c_str(), hdr.length())) {
+    gNetPutClient.stop();
+    gLastVfsErr = "EIO";
+    return false;
+  }
+
+  gNetPutOpen    = true;
+  gNetPutPath    = String(path);
+  gNetPutSubPath = subPath;
+  gNetPutBytes   = 0;
+  return true;
+}
+
+bool lakatosNetPutWrite(const char* path, const char* mode, uint32_t offset, const void* buf, size_t len) {
+  gLastVfsErr = "EIO";
+  bool isTrunc = (mode && strcmp(mode, "W") == 0 && offset == 0);
+  if (!gNetPutOpen || gNetPutPath != path || (isTrunc && gNetPutBytes > 0)) {
+    if (offset != 0) {
+      return false;
+    }
+    if (!lakatosNetPutBegin(path)) {
+      return false;
+    }
+  }
+
+  if (gNetPutClient.available() > 0) {
+    int earlyCode = readNetPutResponseCode(gNetPutClient, 200);
+    if (earlyCode > 0 && (earlyCode < 200 || earlyCode >= 300)) {
+      String sub = gNetPutSubPath;
+      lakatosNetPutAbort();
+      setShHttpError("PUT", sub, earlyCode);
+      return false;
+    }
+  }
+
+  const uint8_t* p = (const uint8_t*)buf;
+  size_t rem = (buf != nullptr) ? len : 0;
+  while (rem > 0) {
+    size_t slice = (rem > 2048) ? 2048 : rem;
+    char chunkHdr[16];
+    int hdrLen = snprintf(chunkHdr, sizeof(chunkHdr), "%x\r\n", (unsigned)slice);
+    if (!writeAllToClient(gNetPutClient, (const uint8_t*)chunkHdr, (size_t)hdrLen) ||
+        !writeAllToClient(gNetPutClient, p, slice) ||
+        !writeAllToClient(gNetPutClient, (const uint8_t*)"\r\n", 2)) {
+      int earlyCode = readNetPutResponseCode(gNetPutClient, 400);
+      String sub = gNetPutSubPath;
+      lakatosNetPutAbort();
+      setShHttpError("PUT", sub, earlyCode != 0 ? earlyCode : -3);
+      return false;
+    }
+    p += slice;
+    rem -= slice;
+    gNetPutBytes += slice;
+  }
+  return true;
+}
+
+bool lakatosNetPutCommit(const char* path) {
+  gLastVfsErr = "EIO";
+  if (!gNetPutOpen || (path && path[0] && gNetPutPath != path)) {
+    return false;
+  }
+
+  bool wroteEnd = writeAllToClient(gNetPutClient, (const uint8_t*)"0\r\n\r\n", 5);
+  int code = readNetPutResponseCode(gNetPutClient, 8000);
+  String subPath = gNetPutSubPath;
+  size_t totalBytes = gNetPutBytes;
+  lakatosNetPutAbort();
+
+  bool ok = wroteEnd && (code >= 200 && code < 300);
+  if (!ok) {
+    setShHttpError("PUT", subPath, code != 0 ? code : -3);
+  }
+  lakatosDevLogf("VFS write %s (%u B) -> %s (HTTP %d)",
+                 path ? path : "", (unsigned)totalBytes, ok ? "OK" : "FAIL", code);
+  return ok;
+}
+
 bool lakatosFsWrite(const char* path, const void* buf, size_t len) {
   gLastVfsErr = "EIO";
   String subPath;
   VfsBackend b = parseVfsPath(path, subPath);
   bool ok = false;
-  int httpCode = 0;
   if (b == VFS_LO || b == VFS_SD) {
     fs::FS* fsPtr = (b == VFS_LO) ? (fs::FS*)&LittleFS : (fs::FS*)&SD;
     if (b == VFS_LO && !gLoMounted) return false;
@@ -669,29 +869,19 @@ bool lakatosFsWrite(const char* path, const void* buf, size_t len) {
     size_t w = (len > 0 && buf) ? f.write((const uint8_t*)buf, len) : 0;
     f.close();
     ok = (w == len);
-  } else if (b == VFS_SH) {
-    if (WiFi.status() != WL_CONNECTED) return false;
-    WiFiClient client;
-    HTTPClient http;
-    http.useHTTP10(true);
-    String url = buildShTargetUrl(subPath);
-    if (!http.begin(client, url)) return false;
-    addShBasicAuthHeader(http);
-    httpCode = http.sendRequest("PUT", (uint8_t*)buf, len);
-    http.end();
-    ok = (httpCode >= 200 && httpCode < 300);
-    if (!ok) {
-      setShHttpError("PUT", subPath, httpCode);
-    }
-  }
-  if (b == VFS_SH) {
-    lakatosDevLogf("VFS write %s (%u B) -> %s (HTTP %d)",
-                   path ? path : "", (unsigned)len, ok ? "OK" : "FAIL", httpCode);
-  } else {
     lakatosDevLogf("VFS write %s (%u B) -> %s",
                    path ? path : "", (unsigned)len, ok ? "OK" : "FAIL");
+    return ok;
+  } else if (b == VFS_SH) {
+    if (!lakatosNetPutBegin(path)) return false;
+    if (len > 0 && buf) {
+      if (!lakatosNetPutWrite(path, "A", 0, buf, len)) {
+        return false;
+      }
+    }
+    return lakatosNetPutCommit(path);
   }
-  return ok;
+  return false;
 }
 
 bool lakatosFsWriteAt(const char* path, uint32_t offset, const void* buf, size_t len) {

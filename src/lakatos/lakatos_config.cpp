@@ -19,10 +19,10 @@
 // ---------------------------------------------------------------------------
 struct TouchCalibration {
   bool  swapXY = false;
-  float uAtX1  = 450.0f;
-  float uAtX2  = 3550.0f;
-  float vAtY1  = 550.0f;
-  float vAtY2  = 3450.0f;
+  float uAtX1  = 650.0f;
+  float uAtX2  = 3350.0f;
+  float vAtY1  = 980.0f;
+  float vAtY2  = 3280.0f;
   int   calX1  = 40;
   int   calX2  = 280;
   int   calY1  = 50;
@@ -36,10 +36,10 @@ bool loadTouchCalibrationFromNvs() {
   bool valid = prefs.getBool("valid", false);
   if (valid) {
     gCal.swapXY = prefs.getBool("swapXY", false);
-    gCal.uAtX1  = prefs.getFloat("u1", 450.0f);
-    gCal.uAtX2  = prefs.getFloat("u2", 3550.0f);
-    gCal.vAtY1  = prefs.getFloat("v1", 550.0f);
-    gCal.vAtY2  = prefs.getFloat("v2", 3450.0f);
+    gCal.uAtX1  = prefs.getFloat("u1", 650.0f);
+    gCal.uAtX2  = prefs.getFloat("u2", 3350.0f);
+    gCal.vAtY1  = prefs.getFloat("v1", 980.0f);
+    gCal.vAtY2  = prefs.getFloat("v2", 3280.0f);
   }
   prefs.end();
   return valid;
@@ -765,7 +765,7 @@ static void runTouchCalibrationModal() {
   gCal.swapXY = (dy12 > dx12);
   gCal.uAtX1  = gCal.swapXY ? (float)rawY[0] : (float)rawX[0];
   gCal.uAtX2  = gCal.swapXY ? (float)rawY[1] : (float)rawX[1];
-  gCal.vAtY1  = gCal.swapXY ? (float)rawX[0] : (float)rawY[0];
+  gCal.vAtY1  = gCal.swapXY ? (float)(rawX[0] + rawX[1]) * 0.5f : (float)(rawY[0] + rawY[1]) * 0.5f;
   gCal.vAtY2  = gCal.swapXY ? (float)rawX[2] : (float)rawY[2];
   saveTouchCalibrationToNvs();
   Serial.printf("[Lakatos] Saved touch calibration: swapXY=%d u=[%.0f..%.0f] v=[%.0f..%.0f]\r\n",
@@ -2060,6 +2060,8 @@ void runLakatosConfigScreen(bool startInCalibration) {
 
   if (startInCalibration) {
     runTouchCalibrationModal();
+    lakatosSetInConfigScreen(false);
+    return;
   }
   drawConfigScreen();
   lakatosWaitTouchRelease();
