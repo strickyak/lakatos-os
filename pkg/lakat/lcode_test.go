@@ -1125,12 +1125,15 @@ func main() {
 		t.Fatalf("24x24 Exit X not drawn properly")
 	}
 	// Verify 24x24 downward-pointing Menu Wedge in NE corner (x = 296..319):
-	// Hypotenuse across top row y=0 (x=296..319 all WHITE), right angle pointing down at y=11 (x=307..308 WHITE, 306 BLACK)
-	if vm.Screen[0][296] != 0xFFFF || vm.Screen[0][319] != 0xFFFF || vm.Screen[0][295] != 0x0000 {
-		t.Fatalf("24x24 Menu Wedge top hypotenuse not drawn properly: (296,0)=0x%04X (319,0)=0x%04X", vm.Screen[0][296], vm.Screen[0][319])
+	// Outlined triangle with black interior, centered vertically at y=6..17 (xL=298, xR=317, xM=307)
+	if vm.Screen[6][298] != 0xFFFF || vm.Screen[6][317] != 0xFFFF || vm.Screen[6][297] != 0x0000 || vm.Screen[0][296] != 0x0000 {
+		t.Fatalf("24x24 Menu Wedge top outline not drawn properly: (298,6)=0x%04X (317,6)=0x%04X", vm.Screen[6][298], vm.Screen[6][317])
 	}
-	if vm.Screen[11][307] != 0xFFFF || vm.Screen[11][308] != 0xFFFF || vm.Screen[11][306] != 0x0000 || vm.Screen[12][307] != 0x0000 {
-		t.Fatalf("24x24 Menu Wedge downward tip not drawn properly at y=11")
+	if vm.Screen[8][307] != 0x0000 {
+		t.Fatalf("24x24 Menu Wedge interior should be black at (307,8), got 0x%04X", vm.Screen[8][307])
+	}
+	if vm.Screen[17][307] != 0xFFFF || vm.Screen[18][307] != 0x0000 {
+		t.Fatalf("24x24 Menu Wedge downward tip not drawn properly at (307,17)")
 	}
 }
 
@@ -1174,15 +1177,15 @@ func TestGalleryAmbientModeHidesAndRestoresWedges(t *testing.T) {
 	injectedExit := false
 
 	vm.StepHook = func(v *VM, pc int, op byte) {
-		// 1. Before 60s: both NW Exit X (0,0) and NE Menu Wedge (319,0) are visible
+		// 1. Before 60s: both NW Exit X (0,0) and NE Menu Wedge (313,3) are visible
 		if v.VirtualMs >= 2000 && v.VirtualMs < 50000 && !sawInitialWedges {
-			if v.Screen[0][0] == 0xFFFF && v.Screen[0][319] == 0xFFFF {
+			if v.Screen[0][0] == 0xFFFF && v.Screen[3][313] == 0xFFFF {
 				sawInitialWedges = true
 			}
 		}
 		// 2. After 60s with no touch clicks: both NW Exit X and NE Menu Wedge are hidden
 		if v.VirtualMs >= 62000 && !sawHiddenInAmbient {
-			if v.Screen[0][0] == 0x0000 && v.Screen[0][319] == 0x0000 {
+			if v.Screen[0][0] == 0x0000 && v.Screen[3][313] == 0x0000 {
 				sawHiddenInAmbient = true
 				if !injectedWakeClick {
 					injectedWakeClick = true
@@ -1193,7 +1196,7 @@ func TestGalleryAmbientModeHidesAndRestoresWedges(t *testing.T) {
 		}
 		// 3. After the touch click: both NW Exit X and NE Menu Wedge reappear
 		if sawHiddenInAmbient && injectedWakeClick && !sawRestoredAfterClick {
-			if v.Screen[0][0] == 0xFFFF && v.Screen[0][319] == 0xFFFF {
+			if v.Screen[0][0] == 0xFFFF && v.Screen[3][313] == 0xFFFF {
 				sawRestoredAfterClick = true
 				if !injectedExit {
 					injectedExit = true

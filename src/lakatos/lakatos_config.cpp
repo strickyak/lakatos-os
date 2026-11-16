@@ -682,7 +682,6 @@ static void drawKeyboardModeMenu(bool isGraf) {
 
 static void drawKeyboardModalHeader(const char* title, bool allowCtrlC,
                                     const String& text, int& cursor, int& viewStart) {
-  int sz = lakatosGetCornerSize();
   LakatosTftGuard tftLock;
   tft.fillScreen(0x0841);
   tft.fillRect(0, 0, LAKATOS_SCREEN_W, 25, TFT_NAVY);
@@ -704,10 +703,7 @@ static void drawKeyboardModalHeader(const char* title, bool allowCtrlC,
   tft.drawString(title ? title : "INPUT", allowCtrlC ? 214 : 190, 12, 2);
 
   // Standard NE corner downward-pointing Menu Wedge
-  tft.fillRect(LAKATOS_SCREEN_W - sz, 0, sz, sz, TFT_BLACK);
-  for (int y = 0; y * 2 < sz; y++) {
-    tft.drawFastHLine(LAKATOS_SCREEN_W - sz + y, y, sz - 2 * y, TFT_WHITE);
-  }
+  lakatosDrawMenuWedge();
 
   drawKbInputBox(text, cursor, viewStart);
 }

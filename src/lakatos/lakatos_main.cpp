@@ -1044,6 +1044,28 @@ static void refreshDirectory() {
   gPageIdx = 0;
 }
 
+void lakatosDrawExitWedge() {
+  int sz = lakatosGetCornerSize();
+  LakatosTftGuard tftGuard;
+  tft.fillRect(0, 0, sz, sz, TFT_BLACK);
+  tft.drawLine(0, 0, sz - 1, sz - 1, TFT_WHITE);
+  tft.drawLine(sz - 1, 0, 0, sz - 1, TFT_WHITE);
+}
+
+void lakatosDrawMenuWedge() {
+  int sz = lakatosGetCornerSize();
+  int xL = LAKATOS_SCREEN_W - sz + 2;
+  int xR = LAKATOS_SCREEN_W - 3;
+  int xM = (xL + xR) / 2;
+  int yT = sz / 4;
+  int yB = yT + (sz - 1) / 2;
+  LakatosTftGuard tftGuard;
+  tft.fillRect(LAKATOS_SCREEN_W - sz, 0, sz, sz, TFT_BLACK);
+  tft.drawFastHLine(xL, yT, xR - xL + 1, TFT_WHITE);
+  tft.drawLine(xL, yT, xM, yB, TFT_WHITE);
+  tft.drawLine(xR, yT, xM, yB, TFT_WHITE);
+}
+
 static void drawHomeHeaderBar() {
   LakatosTftGuard tftGuard;
   tft.fillRect(0, 0, 320, 23, 0x10A2);
@@ -1074,10 +1096,7 @@ static void drawHomeHeaderBar() {
   tft.fillCircle(320 - sz - 8, 11, 4, wifiOk ? TFT_GREEN : TFT_RED);
 
   // Standard NE Menu Wedge at top-right (replaces old [MENU]/[Config] button)
-  tft.fillRect(320 - sz, 0, sz, sz, TFT_BLACK);
-  for (int y = 0; y * 2 < sz; y++) {
-    tft.drawFastHLine(320 - sz + y, y, sz - 2 * y, TFT_WHITE);
-  }
+  lakatosDrawMenuWedge();
 
   gLastClockDrawMs = millis();
   gLastWifiState = wifiOk;

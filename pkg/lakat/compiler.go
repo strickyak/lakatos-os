@@ -422,10 +422,15 @@ func DrawExitWedge() {
 
 func DrawMenuWedge() {
 	s := os_get_corner_size()
+	xL := 320 - s + 2
+	xR := 320 - 3
+	xM := (xL + xR) / 2
+	yT := s / 4
+	yB := yT + (s-1)/2
 	tft_fill_rect(320-s, 0, s, s, BLACK)
-	for y := 0; y*2 < s; y = y + 1 {
-		tft_draw_fast_hline(320-s+y, y, s-2*y, WHITE)
-	}
+	tft_draw_fast_hline(xL, yT, xR-xL+1, WHITE)
+	tft_draw_line(xL, yT, xM, yB, WHITE)
+	tft_draw_line(xR, yT, xM, yB, WHITE)
 }
 
 func IsMenuWedge(tx int, ty int) bool {
