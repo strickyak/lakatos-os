@@ -218,8 +218,16 @@ struct AppState {
   char          pageFilePath[192];
 
   // Song Metadata & Timing
+  static constexpr int kMaxInfoLines = 12;
   char          songTitle[32];
   char          currentFileName[48];
+  char          infoLines[kMaxInfoLines][48];
+  int           infoLineCount;
+  uint8_t       timeSigNum;
+  uint8_t       timeSigDen;
+  int8_t        keySigSf;
+  uint8_t       keySigMi;
+  bool          hasKeySig;
   uint16_t      midiFormat;
   uint16_t      numTracks;
   uint16_t      ticksPerQuarter;
@@ -234,8 +242,9 @@ struct AppState {
   bool              autoNextSong;
   int               masterVolIdx;   // 0..11 ("goes to 11")
 
-  // File Browser State
+  // File Browser & Info View State
   bool          inBrowserView;
+  bool          inInfoView;
   char          curDir[128];
   BrowserItem   items[kMaxBrowserItems];
   int           itemCount;
@@ -927,10 +936,36 @@ static void freeCurrentMidiResources() {
   gState.inRamCap  = 0;
 }
 
+static void addMidiInfoLine(const char* prefix, const char* raw) {
+  if (gState.infoLineCount >= AppState::kMaxInfoLines) return;
+  char clean[48];
+  int start = 0;
+  while (raw[start] == ' ') start++;
+  int len = 0;
+  for (int i = start; raw[i] != '\0' && len < (int)sizeof(clean) - 1; i++) {
+    clean[len++] = raw[i];
+  }
+  while (len > 0 && clean[len - 1] == ' ') len--;
+  clean[len] = '\0';
+  if (len == 0) return;
+
+  char line[48];
+  if (prefix && prefix[0] != '\0') {
+    snprintf(line, sizeof(line), "%s: %s", prefix, clean);
+  } else {
+    snprintf(line, sizeof(line), "%s", clean);
+  }
+  for (int i = 0; i < gState.infoLineCount; i++) {
+    if (strcmp(gState.infoLines[i], line) == 0) return;
+  }
+  snprintf(gState.infoLines[gState.infoLineCount], 48, "%s", line);
+  gState.infoLineCount++;
+}
+
 static void inspectInitialTrackMeta(int t) {
   MidiTrack& tr = gState.tracks[t];
   uint32_t scanOff = tr.startOff;
-  uint32_t limitOff = tr.startOff + 160u;
+  uint32_t limitOff = tr.startOff + 256u;
   if (limitOff > tr.endOff) limitOff = tr.endOff;
 
   while (scanOff + 4u < limitOff) {
@@ -941,7 +976,7 @@ static void inspectInitialTrackMeta(int t) {
     uint8_t mlen  = peekTrackByte(t, scanOff + 3u);
     if (mlen >= 0x80u || scanOff + 4u + mlen > limitOff) break;
 
-    if (mtype == 0x03u && mlen > 0) {
+    if (mtype >= 0x01u && mtype <= 0x07u && mlen > 0) {
       char tname[48];
       uint8_t copyLen = (mlen < sizeof(tname) - 1) ? mlen : (uint8_t)(sizeof(tname) - 1);
       for (uint8_t i = 0; i < copyLen; i++) {
@@ -949,25 +984,47 @@ static void inspectInitialTrackMeta(int t) {
         tname[i] = (c >= 32 && c <= 126) ? c : ' ';
       }
       tname[copyLen] = '\0';
-      if (strContainsIgnoreCase(tname, "organ") || strContainsIgnoreCase(tname, "pedal")) {
-        tr.organHint = true;
+
+      if (mtype == 0x01u) {
+        addMidiInfoLine("TXT", tname);
+      } else if (mtype == 0x02u) {
+        addMidiInfoLine("COP", tname);
+      } else if (mtype == 0x03u) {
+        char trkTag[8];
+        snprintf(trkTag, sizeof(trkTag), "T%d", t + 1);
+        addMidiInfoLine(trkTag, tname);
+        if (strContainsIgnoreCase(tname, "organ") || strContainsIgnoreCase(tname, "pedal")) {
+          tr.organHint = true;
+        }
+        if (gState.songTitle[0] == '\0' && copyLen >= 3 &&
+            !strContainsIgnoreCase(tname, "swell") &&
+            !strContainsIgnoreCase(tname, "great") &&
+            !strContainsIgnoreCase(tname, "pedal") &&
+            !strContainsIgnoreCase(tname, "stops") &&
+            !strContainsIgnoreCase(tname, "violin") &&
+            !strContainsIgnoreCase(tname, "viola") &&
+            !strContainsIgnoreCase(tname, "cello") &&
+            !strContainsIgnoreCase(tname, "oboe") &&
+            !strContainsIgnoreCase(tname, "flute") &&
+            !strContainsIgnoreCase(tname, "horn") &&
+            !strContainsIgnoreCase(tname, "trump") &&
+            !strContainsIgnoreCase(tname, "bass")) {
+          strncpy(gState.songTitle, tname, sizeof(gState.songTitle) - 1);
+          gState.songTitle[sizeof(gState.songTitle) - 1] = '\0';
+        }
+      } else if (mtype == 0x04u) {
+        addMidiInfoLine("INS", tname);
+      } else if (mtype == 0x06u || mtype == 0x07u) {
+        addMidiInfoLine("MRK", tname);
       }
-      if (gState.songTitle[0] == '\0' && copyLen >= 3 &&
-          !strContainsIgnoreCase(tname, "swell") &&
-          !strContainsIgnoreCase(tname, "great") &&
-          !strContainsIgnoreCase(tname, "pedal") &&
-          !strContainsIgnoreCase(tname, "stops") &&
-          !strContainsIgnoreCase(tname, "violin") &&
-          !strContainsIgnoreCase(tname, "viola") &&
-          !strContainsIgnoreCase(tname, "cello") &&
-          !strContainsIgnoreCase(tname, "oboe") &&
-          !strContainsIgnoreCase(tname, "flute") &&
-          !strContainsIgnoreCase(tname, "horn") &&
-          !strContainsIgnoreCase(tname, "trump") &&
-          !strContainsIgnoreCase(tname, "bass")) {
-        strncpy(gState.songTitle, tname, sizeof(gState.songTitle) - 1);
-        gState.songTitle[sizeof(gState.songTitle) - 1] = '\0';
-      }
+    } else if (mtype == 0x58u && mlen == 4u && gState.timeSigNum == 0) {
+      gState.timeSigNum = peekTrackByte(t, scanOff + 4u);
+      uint8_t dd = peekTrackByte(t, scanOff + 5u);
+      gState.timeSigDen = (dd < 6u) ? (uint8_t)(1u << dd) : 4u;
+    } else if (mtype == 0x59u && mlen == 2u && !gState.hasKeySig) {
+      gState.keySigSf = (int8_t)peekTrackByte(t, scanOff + 4u);
+      gState.keySigMi = peekTrackByte(t, scanOff + 5u);
+      gState.hasKeySig = true;
     }
     scanOff += 4u + mlen;
   }
@@ -1013,6 +1070,10 @@ static bool loadAndPlayMidiFile(const char* fullPath, const char* displayName) {
   strncpy(gState.currentFileName, displayName ? displayName : fullPath, sizeof(gState.currentFileName) - 1);
   gState.currentFileName[sizeof(gState.currentFileName) - 1] = '\0';
   gState.songTitle[0] = '\0';
+  gState.infoLineCount = 0;
+  gState.timeSigNum = 0;
+  gState.timeSigDen = 0;
+  gState.hasKeySig = false;
 
   // Determine whether we can page directly from fullPath or should stream into RAM / cache
   size_t pathLen = strlen(fullPath);
@@ -1256,39 +1317,44 @@ static void drawTopHeader() {
   int cs = lakatos_corner_size(os);
   lakatos_draw_exit_wedge(os);
 
-  // Song title / filename
-  os->tft_set_text_datum(LAKATOS_ML_DATUM);
-  os->tft_set_text_color(LAKATOS_CYAN, 0x10A2);
-  if (gState.songLoaded && gState.songTitle[0] != '\0') {
-    char tbuf[24];
-    strncpy(tbuf, gState.songTitle, 20);
-    tbuf[20] = '\0';
-    os->tft_draw_string(tbuf, cs + 6, 14, 2);
+  // Song filename basename (line 1) & title (line 2)
+  int textX = cs + 4;
+  int maxChars = (258 - textX) / 6;
+  if (maxChars < 12) maxChars = 12;
+  if (maxChars > 44) maxChars = 44;
+
+  os->tft_set_text_datum(LAKATOS_TL_DATUM);
+  if (gState.songLoaded) {
+    const char* base = gState.currentFileName;
+    for (int i = 0; gState.currentFileName[i] != '\0'; i++) {
+      if (gState.currentFileName[i] == '/') base = gState.currentFileName + i + 1;
+    }
+    char line1[48];
+    snprintf(line1, sizeof(line1), "%s", base);
+    line1[maxChars] = '\0';
+    os->tft_set_text_color(LAKATOS_CYAN, 0x10A2);
+    os->tft_draw_string(line1, textX, 3, 1);
+
+    char line2[48];
+    snprintf(line2, sizeof(line2), "%s",
+             (gState.songTitle[0] != '\0') ? gState.songTitle : "(untitled)");
+    line2[maxChars] = '\0';
+    os->tft_set_text_color(LAKATOS_YELLOW, 0x10A2);
+    os->tft_draw_string(line2, textX, 15, 1);
   } else {
-    os->tft_draw_string("MIDI SYNTH", cs + 6, 14, 2);
+    os->tft_set_text_color(LAKATOS_CYAN, 0x10A2);
+    os->tft_draw_string("MIDI SYNTH", textX, 4, 1);
+    os->tft_set_text_color(LAKATOS_LIGHTGREY, 0x10A2);
+    os->tft_draw_string("Tap FILES to browse", textX, 15, 1);
   }
 
-  // [FILES] / [SYNTH] view toggle button
+  // [FILES] / [SYNTH] view toggle button on top-right
   uint16_t viewBg = gState.inBrowserView ? 0x03E0 : 0x2124;
-  os->tft_fill_round_rect(206, 2, 56, 24, 4, viewBg);
-  os->tft_draw_round_rect(206, 2, 56, 24, 4, LAKATOS_CYAN);
+  os->tft_fill_round_rect(262, 2, 56, 24, 4, viewBg);
+  os->tft_draw_round_rect(262, 2, 56, 24, 4, LAKATOS_CYAN);
   os->tft_set_text_datum(LAKATOS_MC_DATUM);
   os->tft_set_text_color(LAKATOS_WHITE, viewBg);
-  os->tft_draw_string(gState.inBrowserView ? "SYNTH" : "FILES", 234, 14, 2);
-
-  // Master Volume indicator / mute-toggle badge [VOL:0..11]
-  int vol = gState.masterVolIdx;
-  if (vol < 0) vol = 0;
-  if (vol > 11) vol = 11;
-  uint16_t volCol = (vol == 0) ? 0x7BEF
-                               : ((vol <= 8) ? LAKATOS_GREEN
-                                             : ((vol <= 10) ? LAKATOS_ORANGE : LAKATOS_RED));
-  os->tft_fill_round_rect(264, 2, 54, 24, 4, 0x0841);
-  os->tft_draw_round_rect(264, 2, 54, 24, 4, volCol);
-  char vbuf[16];
-  snprintf(vbuf, sizeof(vbuf), "VOL:%d", vol);
-  os->tft_set_text_color(volCol, 0x0841);
-  os->tft_draw_string(vbuf, 291, 14, 2);
+  os->tft_draw_string(gState.inBrowserView ? "SYNTH" : "FILES", 290, 14, 2);
   os->tft_set_text_datum(LAKATOS_TL_DATUM);
 }
 
@@ -1442,6 +1508,60 @@ static void drawVolumeSliderBar() {
   os->tft_set_text_datum(LAKATOS_TL_DATUM);
 }
 
+static void drawInfoView() {
+  const LakatosApi* os = gState.os;
+  os->tft_fill_rect(0, 28, 320, 148, LAKATOS_BLACK);
+  os->tft_set_text_datum(LAKATOS_TL_DATUM);
+
+  if (!gState.songLoaded) {
+    os->tft_set_text_color(0xBDF7, LAKATOS_BLACK);
+    os->tft_draw_string("No MIDI loaded", 12, 92, 2);
+    return;
+  }
+
+  static const char* const kMajKeys[15] = {
+      "Cb", "Gb", "Db", "Ab", "Eb", "Bb", "F", "C",
+      "G",  "D",  "A",  "E",  "B",  "F#", "C#"
+  };
+  static const char* const kMinKeys[15] = {
+      "Ab", "Eb", "Bb", "F",  "C",  "G",  "D", "A",
+      "E",  "B",  "F#", "C#", "G#", "D#", "A#"
+  };
+
+  char hdr[56];
+  int pos = snprintf(hdr, sizeof(hdr), "Fmt:%u Trk:%u PPQ:%u",
+                     (unsigned)gState.midiFormat,
+                     (unsigned)gState.numTracks,
+                     (unsigned)gState.ticksPerQuarter);
+  if (gState.timeSigNum > 0 && pos < (int)sizeof(hdr)) {
+    pos += snprintf(hdr + pos, sizeof(hdr) - pos, " %u/%u",
+                    (unsigned)gState.timeSigNum, (unsigned)gState.timeSigDen);
+  }
+  if (gState.hasKeySig && gState.keySigSf >= -7 && gState.keySigSf <= 7 && pos < (int)sizeof(hdr)) {
+    int kIdx = (int)gState.keySigSf + 7;
+    const char* kName = (gState.keySigMi == 0) ? kMajKeys[kIdx] : kMinKeys[kIdx];
+    snprintf(hdr + pos, sizeof(hdr) - pos, " %s%s", kName, (gState.keySigMi == 0) ? "maj" : "min");
+  }
+  os->tft_set_text_color(LAKATOS_YELLOW, LAKATOS_BLACK);
+  os->tft_draw_string(hdr, 4, 30, 1);
+  os->tft_draw_fast_h_line(0, 40, 320, 0x3186);
+
+  if (gState.infoLineCount == 0) {
+    os->tft_set_text_color(0x7BEF, LAKATOS_BLACK);
+    os->tft_draw_string("(no text / track metadata)", 4, 44, 1);
+    return;
+  }
+
+  for (int i = 0; i < gState.infoLineCount && i < AppState::kMaxInfoLines; i++) {
+    const char* ln = gState.infoLines[i];
+    uint16_t col = (strncmp(ln, "TXT:", 4) == 0 || strncmp(ln, "COP:", 4) == 0)
+                       ? LAKATOS_GREEN
+                       : LAKATOS_CYAN;
+    os->tft_set_text_color(col, LAKATOS_BLACK);
+    os->tft_draw_string(ln, 4, 43 + i * 11, 1);
+  }
+}
+
 static void drawTransportBar() {
   const LakatosApi* os = gState.os;
   os->tft_fill_rect(0, 208, 320, 32, 0x10A2);
@@ -1453,10 +1573,10 @@ static void drawTransportBar() {
     uint16_t bg;
   };
   Btn btns[4] = {
-      {  4, 68, "|< PREV", 0x2124},
-      { 76, 84, gState.playing ? "PAUSE" : "PLAY", (uint16_t)(gState.playing ? 0x03E0u : 0x8400u)},
-      {164, 68, "NEXT >|", 0x2124},
-      {236, 80, gState.autoNextSong ? "MODE:NEXT" : "MODE:LOOP", 0x18E3},
+      {  4, 74, "|< PREV", 0x2124},
+      { 82, 74, gState.playing ? "PAUSE" : "PLAY", (uint16_t)(gState.playing ? 0x03E0u : 0x8400u)},
+      {160, 74, "INFO", (uint16_t)(gState.inInfoView ? 0x03EFu : 0x2124u)},
+      {238, 78, "NEXT >|", 0x2124},
   };
 
   os->tft_set_text_datum(LAKATOS_MC_DATUM);
@@ -1543,8 +1663,12 @@ static void drawFullScreen() {
   if (gState.inBrowserView) {
     drawBrowserView();
   } else {
-    drawMidiStatusBar();
-    drawMidiChannelsGrid(true);
+    if (gState.inInfoView) {
+      drawInfoView();
+    } else {
+      drawMidiStatusBar();
+      drawMidiChannelsGrid(true);
+    }
     drawVolumeSliderBar();
     drawTransportBar();
   }
@@ -1556,7 +1680,7 @@ static void drawFullScreen() {
 extern "C" void app_main(const LakatosApi* os) {
   memset(&gState, 0, sizeof(gState));
   gState.os                 = os;
-  gState.masterVolIdx       = 7; // Default level 7 on 0..11 scale (8 = unity, 9..11 = overdrive)
+  gState.masterVolIdx       = 3; // Default level 3 on 0..11 scale (8 = unity, 9..11 = overdrive)
   gState.autoNextSong       = true;
   gState.currentSongItemIdx = -1;
 
@@ -1583,7 +1707,6 @@ extern "C" void app_main(const LakatosApi* os) {
   uint32_t lastUiDrawMs = 0;
   bool touchHeld = false;
   bool draggingVolSlider = false;
-  int savedVolBeforeMute = 7;
 
   for (;;) {
     while (os->serial_available() > 0) {
@@ -1612,7 +1735,7 @@ extern "C" void app_main(const LakatosApi* os) {
     }
 
     uint32_t nowMs = os->millis();
-    if (!gState.inBrowserView && gState.songLoaded && (uint32_t)(nowMs - lastUiDrawMs) >= 60u) {
+    if (!gState.inBrowserView && !gState.inInfoView && gState.songLoaded && (uint32_t)(nowMs - lastUiDrawMs) >= 60u) {
       lastUiDrawMs = nowMs;
       drawMidiStatusBar();
       drawMidiChannelsGrid(false);
@@ -1634,10 +1757,8 @@ extern "C" void app_main(const LakatosApi* os) {
         if (newVol > 11) newVol = 11;
         if (newVol != gState.masterVolIdx) {
           gState.masterVolIdx = newVol;
-          if (newVol > 0) savedVolBeforeMute = newVol;
           applyMasterVolumeImmediate();
           drawVolumeSliderBar();
-          drawTopHeader();
         }
       } else if (!touchHeld) {
         touchHeld = true;
@@ -1649,21 +1770,9 @@ extern "C" void app_main(const LakatosApi* os) {
             os->audio_stop();
             os->set_rgb_led(false, false, false, 0);
             os->exit(0);
-          } else if (tx >= 204 && tx <= 262) {
+          } else if (tx >= 260) {
             gState.inBrowserView = !gState.inBrowserView;
             drawFullScreen();
-          } else if (tx >= 263) {
-            if (gState.masterVolIdx > 0) {
-              savedVolBeforeMute = gState.masterVolIdx;
-              gState.masterVolIdx = 0;
-            } else {
-              gState.masterVolIdx = (savedVolBeforeMute > 0) ? savedVolBeforeMute : 7;
-            }
-            applyMasterVolumeImmediate();
-            drawTopHeader();
-            if (!gState.inBrowserView) {
-              drawVolumeSliderBar();
-            }
           }
         } else if (gState.inBrowserView) {
           // 2. Browser View Touch Handling
@@ -1728,8 +1837,8 @@ extern "C" void app_main(const LakatosApi* os) {
             }
           }
         } else {
-          // 3. Synth View Touch Handling
-          if (ty >= 51 && ty < 171) {
+          // 3. Synth / Info View Touch Handling
+          if (!gState.inInfoView && ty >= 51 && ty < 171) {
             // Tap channel row to toggle mute on MIDI channel 1..16
             int col = (tx >= 160) ? 1 : 0;
             int row = (ty - 51) / 15;
@@ -1746,11 +1855,11 @@ extern "C" void app_main(const LakatosApi* os) {
               drawMidiChannelsGrid(false);
             }
           } else if (ty >= 208) {
-            if (tx < 74) {
+            if (tx < 80) {
               if (playAdjacentSong(-1)) {
                 drawFullScreen();
               }
-            } else if (tx < 162) {
+            } else if (tx < 158) {
               gState.playing = !gState.playing;
               if (!gState.playing) {
                 for (int v = 0; v < kMaxVoices; v++) {
@@ -1758,13 +1867,13 @@ extern "C" void app_main(const LakatosApi* os) {
                 }
               }
               drawTransportBar();
-            } else if (tx < 234) {
+            } else if (tx < 236) {
+              gState.inInfoView = !gState.inInfoView;
+              drawFullScreen();
+            } else {
               if (playAdjacentSong(1)) {
                 drawFullScreen();
               }
-            } else {
-              gState.autoNextSong = !gState.autoNextSong;
-              drawTransportBar();
             }
           }
         }
