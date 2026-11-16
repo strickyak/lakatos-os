@@ -91,10 +91,17 @@ static const char* const kNoteNames[36] = {
 // ---------------------------------------------------------------------------
 // Data Structures (Placed in 32 KB Static Arena 0x3FFC8000)
 // ---------------------------------------------------------------------------
-static constexpr uint32_t kStaticPatPoolSize = 16384u; // 16 KB static pattern pool in .bss
+static constexpr uint32_t kStaticPatPoolSize = 14336u; // 14 KB static pattern pool in .bss
 static constexpr int      kMaxTotalPatterns  = 64;
-static constexpr int      kMaxBrowserItems   = 64;
+static constexpr int      kMaxBrowserItems   = 150;
+static constexpr int      kMaxHistory        = 16;
 static constexpr uint32_t kPcmHeapBudget     = 49152u; // 48 KB heap budget for PCM samples
+
+static const char kBuckets[36] = {
+    'a','b','c','d','e','f','g','h','i','j','k','l','m',
+    'n','o','p','q','r','s','t','u','v','w','x','y','z',
+    '0','1','2','3','4','5','6','7','8','9'
+};
 
 struct ModInst {
   char     name[23];
@@ -139,9 +146,22 @@ struct ModChan {
   bool          muted;
 };
 
+enum ItemKind : uint8_t {
+  ITEM_DIR     = 0,
+  ITEM_MOD     = 1,
+  ITEM_MOD_ZIP = 2,
+};
+
 struct BrowserItem {
-  char name[44];
-  bool isDir;
+  char    name[56]; // Stem (without .mod / .mod.zip) for files, or folder name for dirs
+  uint8_t kind;     // ItemKind
+};
+
+struct HistoryEntry {
+  char    dir[48];
+  char    name[56];
+  char    bucket;
+  uint8_t kind;
 };
 
 struct AppState {
@@ -154,7 +174,8 @@ struct AppState {
 
   // Parsed MOD Metadata & Instruments
   char     songTitle[24];
-  char     currentFileName[48];
+  char     currentFileName[56];
+  char     currentSongBucket;
   ModInst  insts[32];     // 1..31 used
   uint8_t  orderTable[128];
   uint8_t  songLen;
@@ -180,13 +201,23 @@ struct AppState {
   bool          autoNextSong;
   int           masterVolIdx; // 0..11 ("goes to 11")
 
-  // File Browser State
+  // File Browser & Random Bucket Playlist State
   bool        inBrowserView;
+  bool        inInfoView;
+  bool        inBucketGrid;
+  bool        randomBucketMode;
+  char        curBucket;
   char        curDir[128];
   BrowserItem items[kMaxBrowserItems];
   int         itemCount;
   int         scrollTop;
   int         currentSongItemIdx;
+  int          randomQueue[5];
+  int          randomQueueLen;
+  int          randomQueuePos;
+  HistoryEntry history[kMaxHistory];
+  int          historyLen;
+  int          historyPos;
 
   // Streaming Loader Scratch State
   uint8_t     hdrBuf[1084];
@@ -224,14 +255,6 @@ static int strCaseCmp(const char* a, const char* b) {
     if (ca != cb) return (int)(uint8_t)ca - (int)(uint8_t)cb;
   }
   return (int)(uint8_t)toLowerAscii(*a) - (int)(uint8_t)toLowerAscii(*b);
-}
-
-static bool hasModExtension(const char* name) {
-  size_t n = strlen(name);
-  if (n >= 4 && strCaseCmp(name + n - 4, ".mod") == 0) return true;
-  if (n >= 8 && strCaseCmp(name + n - 8, ".mod.zip") == 0) return true;
-  if (n >= 4 && strCaseCmp(name, "mod.") == 0) return true;
-  return false;
 }
 
 static int findClosestNoteIdx(uint16_t period, uint8_t finetune) {
@@ -1054,17 +1077,58 @@ static bool loadAndPlayModFile(const char* fullPath, const char* displayName) {
 // ---------------------------------------------------------------------------
 // Directory & File Browser Logic
 // ---------------------------------------------------------------------------
+static uint8_t classifyModExtension(const char* name, size_t* outStemLen) {
+  size_t ln = strlen(name);
+  if (ln > 8 &&
+      (name[ln - 8] == '.') &&
+      (name[ln - 7] == 'm' || name[ln - 7] == 'M') &&
+      (name[ln - 6] == 'o' || name[ln - 6] == 'O') &&
+      (name[ln - 5] == 'd' || name[ln - 5] == 'D') &&
+      (name[ln - 4] == '.') &&
+      (name[ln - 3] == 'z' || name[ln - 3] == 'Z') &&
+      (name[ln - 2] == 'i' || name[ln - 2] == 'I') &&
+      (name[ln - 1] == 'p' || name[ln - 1] == 'P')) {
+    if (outStemLen) *outStemLen = ln - 8;
+    return ITEM_MOD_ZIP;
+  }
+  if (ln > 4 &&
+      (name[ln - 4] == '.') &&
+      (name[ln - 3] == 'm' || name[ln - 3] == 'M') &&
+      (name[ln - 2] == 'o' || name[ln - 2] == 'O') &&
+      (name[ln - 1] == 'd' || name[ln - 1] == 'D')) {
+    if (outStemLen) *outStemLen = ln - 4;
+    return ITEM_MOD;
+  }
+  return ITEM_DIR;
+}
+
+static void buildItemFullPath(const BrowserItem& it, char* outPath, size_t outCap) {
+  const char* ext = (it.kind == ITEM_MOD_ZIP) ? ".mod.zip"
+                  : ((it.kind == ITEM_MOD) ? ".mod" : "");
+  if (strcmp(gState.curDir, "/") == 0) {
+    snprintf(outPath, outCap, "/%s%s", it.name, ext);
+  } else {
+    snprintf(outPath, outCap, "%s/%s%s", gState.curDir, it.name, ext);
+  }
+}
+
 static void loadDirectory(const char* path) {
   strncpy(gState.curDir, path, sizeof(gState.curDir) - 1);
   gState.curDir[sizeof(gState.curDir) - 1] = '\0';
   gState.itemCount = 0;
   gState.scrollTop = 0;
 
-  static LakatosFsEntry rawEntries[64];
-  int n = gState.os->fs_ls(gState.curDir, rawEntries, 64);
-  if (n <= 0) return;
+  LakatosFsEntry* rawEntries =
+      (LakatosFsEntry*)gState.os->malloc(sizeof(LakatosFsEntry) * (size_t)kMaxBrowserItems);
+  if (!rawEntries) return;
 
-  // Collect directories first, then .mod / .mod.zip files
+  int n = gState.os->fs_ls(gState.curDir, rawEntries, kMaxBrowserItems);
+  if (n <= 0) {
+    gState.os->free(rawEntries);
+    return;
+  }
+
+  // Collect directories first, then .mod / .mod.zip files (storing base stem only)
   for (int pass = 0; pass < 2; pass++) {
     for (int i = 0; i < n && gState.itemCount < kMaxBrowserItems; i++) {
       const LakatosFsEntry& e = rawEntries[i];
@@ -1073,21 +1137,28 @@ static void loadDirectory(const char* path) {
         BrowserItem& it = gState.items[gState.itemCount++];
         strncpy(it.name, e.name, sizeof(it.name) - 1);
         it.name[sizeof(it.name) - 1] = '\0';
-        it.isDir = true;
-      } else if (pass == 1 && !e.isDir && hasModExtension(e.name)) {
-        BrowserItem& it = gState.items[gState.itemCount++];
-        strncpy(it.name, e.name, sizeof(it.name) - 1);
-        it.name[sizeof(it.name) - 1] = '\0';
-        it.isDir = false;
+        it.kind = ITEM_DIR;
+      } else if (pass == 1 && !e.isDir) {
+        size_t stemLen = 0;
+        uint8_t kind = classifyModExtension(e.name, &stemLen);
+        if (kind == ITEM_MOD || kind == ITEM_MOD_ZIP) {
+          BrowserItem& it = gState.items[gState.itemCount++];
+          size_t copyLen = (stemLen < sizeof(it.name) - 1) ? stemLen : (sizeof(it.name) - 1);
+          memcpy(it.name, e.name, copyLen);
+          it.name[copyLen] = '\0';
+          it.kind = kind;
+        }
       }
     }
   }
+
+  gState.os->free(rawEntries);
 
   // Simple insertion sort within directories and within files
   for (int i = 1; i < gState.itemCount; i++) {
     BrowserItem key = gState.items[i];
     int j = i - 1;
-    while (j >= 0 && gState.items[j].isDir == key.isDir &&
+    while (j >= 0 && ((gState.items[j].kind == ITEM_DIR) == (key.kind == ITEM_DIR)) &&
            strCaseCmp(gState.items[j].name, key.name) > 0) {
       gState.items[j + 1] = gState.items[j];
       j--;
@@ -1111,7 +1182,122 @@ static void navigateParentDir() {
   }
 }
 
+static bool pickRandomBucketAndQueue() {
+  uint32_t startB = gState.os->rand(36);
+  for (int tries = 0; tries < 36; tries++) {
+    char b = kBuckets[(startB + (uint32_t)tries) % 36u];
+    char dirPath[32];
+    snprintf(dirPath, sizeof(dirPath), "/net/mods/%c", b);
+    loadDirectory(dirPath);
+
+    // Collect indices of all playable songs in this bucket
+    int songIndices[kMaxBrowserItems];
+    int songCnt = 0;
+    for (int i = 0; i < gState.itemCount && songCnt < kMaxBrowserItems; i++) {
+      if (gState.items[i].kind != ITEM_DIR) {
+        songIndices[songCnt++] = i;
+      }
+    }
+    if (songCnt <= 0) continue;
+
+    // Pick up to 5 distinct random songs from this bucket
+    int want = (songCnt < 5) ? songCnt : 5;
+    for (int k = 0; k < want; k++) {
+      int j = k + (int)gState.os->rand((uint32_t)(songCnt - k));
+      int tmp = songIndices[k];
+      songIndices[k] = songIndices[j];
+      songIndices[j] = tmp;
+      gState.randomQueue[k] = songIndices[k];
+    }
+    gState.curBucket        = b;
+    gState.randomQueueLen   = want;
+    gState.randomQueuePos   = 0;
+    gState.randomBucketMode = true;
+    return true;
+  }
+  return false;
+}
+
+static void recordHistoryEntry(const char* dir, const char* name, char bucket, uint8_t kind) {
+  if (!dir || !name || !name[0]) return;
+  if (gState.historyPos + 1 < gState.historyLen) {
+    gState.historyLen = gState.historyPos + 1;
+  }
+  if (gState.historyLen >= kMaxHistory) {
+    memmove(&gState.history[0], &gState.history[1], sizeof(HistoryEntry) * (kMaxHistory - 1));
+    gState.historyLen = kMaxHistory - 1;
+  }
+  HistoryEntry& he = gState.history[gState.historyLen++];
+  strncpy(he.dir, dir, sizeof(he.dir) - 1);
+  he.dir[sizeof(he.dir) - 1] = '\0';
+  strncpy(he.name, name, sizeof(he.name) - 1);
+  he.name[sizeof(he.name) - 1] = '\0';
+  he.bucket = bucket;
+  he.kind   = kind;
+  gState.historyPos = gState.historyLen - 1;
+}
+
+static bool playHistoryEntryAt(int hIdx) {
+  if (hIdx < 0 || hIdx >= gState.historyLen) return false;
+  const HistoryEntry& he = gState.history[hIdx];
+  const char* ext = (he.kind == ITEM_MOD_ZIP) ? ".mod.zip"
+                  : ((he.kind == ITEM_MOD) ? ".mod" : "");
+  char fullPath[192];
+  if (strcmp(he.dir, "/") == 0) {
+    snprintf(fullPath, sizeof(fullPath), "/%s%s", he.name, ext);
+  } else {
+    snprintf(fullPath, sizeof(fullPath), "%s/%s%s", he.dir, he.name, ext);
+  }
+  if (!loadAndPlayModFile(fullPath, he.name)) return false;
+  gState.historyPos        = hIdx;
+  gState.currentSongBucket = he.bucket;
+  return true;
+}
+
+static bool playQueuedRandomSong(bool advanceFirst) {
+  if (!gState.randomBucketMode) return false;
+  if (advanceFirst) {
+    gState.randomQueuePos++;
+  }
+  for (int round = 0; round < 3; round++) {
+    if (gState.randomQueuePos >= gState.randomQueueLen || gState.randomQueueLen <= 0) {
+      if (!pickRandomBucketAndQueue()) return false;
+    }
+    while (gState.randomQueuePos < gState.randomQueueLen) {
+      int idx = gState.randomQueue[gState.randomQueuePos];
+      if (idx >= 0 && idx < gState.itemCount && gState.items[idx].kind != ITEM_DIR) {
+        char fullPath[192];
+        buildItemFullPath(gState.items[idx], fullPath, sizeof(fullPath));
+        if (loadAndPlayModFile(fullPath, gState.items[idx].name)) {
+          gState.currentSongItemIdx = idx;
+          gState.currentSongBucket  = gState.curBucket;
+          recordHistoryEntry(gState.curDir, gState.items[idx].name,
+                             gState.curBucket, gState.items[idx].kind);
+          return true;
+        }
+      }
+      gState.randomQueuePos++;
+    }
+  }
+  return false;
+}
+
 static bool playAdjacentSong(int dir) {
+  if (dir < 0) {
+    if (gState.historyPos > 0) {
+      return playHistoryEntryAt(gState.historyPos - 1);
+    }
+    if (gState.historyLen > 0) {
+      return playHistoryEntryAt(0);
+    }
+  } else if (dir > 0) {
+    if (gState.historyPos + 1 < gState.historyLen) {
+      return playHistoryEntryAt(gState.historyPos + 1);
+    }
+    if (gState.randomBucketMode) {
+      if (playQueuedRandomSong(true)) return true;
+    }
+  }
   if (gState.itemCount <= 0) return false;
   int start = gState.currentSongItemIdx;
   if (start < 0 || start >= gState.itemCount) {
@@ -1119,11 +1305,14 @@ static bool playAdjacentSong(int dir) {
   }
   for (int step = 1; step <= gState.itemCount; step++) {
     int idx = (start + step * dir + gState.itemCount * 2) % gState.itemCount;
-    if (!gState.items[idx].isDir) {
+    if (gState.items[idx].kind != ITEM_DIR) {
       char fullPath[192];
-      snprintf(fullPath, sizeof(fullPath), "%s/%s", gState.curDir, gState.items[idx].name);
+      buildItemFullPath(gState.items[idx], fullPath, sizeof(fullPath));
       if (loadAndPlayModFile(fullPath, gState.items[idx].name)) {
         gState.currentSongItemIdx = idx;
+        gState.currentSongBucket  = gState.curBucket;
+        recordHistoryEntry(gState.curDir, gState.items[idx].name,
+                           gState.curBucket, gState.items[idx].kind);
         return true;
       }
     }
@@ -1142,36 +1331,74 @@ static void drawTopHeader() {
   int cs = lakatos_corner_size(os);
   lakatos_draw_exit_wedge(os);
 
-  // Title / Song name
-  os->tft_set_text_datum(LAKATOS_ML_DATUM);
-  os->tft_set_text_color(LAKATOS_CYAN, 0x10A2);
-  if (gState.songLoaded && gState.songTitle[0] != '\0') {
-    os->tft_draw_string(gState.songTitle, cs + 6, 14, 2);
+  int textX = cs + 4;
+  int maxChars = (258 - textX) / 6;
+  if (maxChars < 12) maxChars = 12;
+  if (maxChars > 44) maxChars = 44;
+
+  os->tft_set_text_datum(LAKATOS_TL_DATUM);
+  if (gState.songLoaded) {
+    char line1[64];
+    if (gState.currentSongBucket != 0) {
+      snprintf(line1, sizeof(line1), "[%c]%s", gState.currentSongBucket, gState.currentFileName);
+    } else {
+      snprintf(line1, sizeof(line1), "%s", gState.currentFileName);
+    }
+    line1[maxChars] = '\0';
+    os->tft_set_text_color(LAKATOS_CYAN, 0x10A2);
+    os->tft_draw_string(line1, textX, 3, 1);
+
+    char titleBuf[48];
+    snprintf(titleBuf, sizeof(titleBuf), "%s",
+             (gState.songTitle[0] != '\0') ? gState.songTitle : "(untitled)");
+    int tLen = (int)strlen(titleBuf);
+    while (tLen > 0 && titleBuf[tLen - 1] == ' ') tLen--;
+    if (tLen == 0) {
+      snprintf(titleBuf, sizeof(titleBuf), "(untitled)");
+      tLen = (int)strlen(titleBuf);
+    }
+    titleBuf[tLen] = '\0';
+    if (tLen > maxChars) {
+      titleBuf[maxChars] = '\0';
+      tLen = maxChars;
+    }
+    os->tft_set_text_color(LAKATOS_YELLOW, 0x10A2);
+    os->tft_draw_string(titleBuf, textX, 15, 1);
+
+    const char* fn = gState.currentFileName;
+    int artistLen = 0;
+    for (int i = 0; fn[i] != '\0' && fn[i + 1] != '\0' && fn[i + 2] != '\0'; i++) {
+      if (fn[i] == '_' && fn[i + 1] == '-' && fn[i + 2] == '_') {
+        artistLen = i;
+        break;
+      }
+    }
+    if (artistLen > 0 && tLen + 1 < maxChars) {
+      int avail = maxChars - (tLen + 1);
+      if (artistLen > avail) artistLen = avail;
+      if (artistLen > 0) {
+        char artistBuf[48];
+        if (artistLen >= (int)sizeof(artistBuf)) artistLen = (int)sizeof(artistBuf) - 1;
+        memcpy(artistBuf, fn, artistLen);
+        artistBuf[artistLen] = '\0';
+        os->tft_set_text_color(LAKATOS_GREEN, 0x10A2);
+        os->tft_draw_string(artistBuf, textX + (tLen + 1) * 6, 15, 1);
+      }
+    }
   } else {
-    os->tft_draw_string("MOD TRACKER", cs + 6, 14, 2);
+    os->tft_set_text_color(LAKATOS_CYAN, 0x10A2);
+    os->tft_draw_string("MOD TRACKER", textX, 4, 1);
+    os->tft_set_text_color(LAKATOS_LIGHTGREY, 0x10A2);
+    os->tft_draw_string("Tap FILES to browse", textX, 15, 1);
   }
 
-  // [FILES] / [TRACK] view toggle button
+  // [FILES] / [TRACK] view toggle button on top-right
   uint16_t viewBg = gState.inBrowserView ? 0x03E0 : 0x2124;
-  os->tft_fill_round_rect(206, 2, 56, 24, 4, viewBg);
-  os->tft_draw_round_rect(206, 2, 56, 24, 4, LAKATOS_CYAN);
+  os->tft_fill_round_rect(262, 2, 56, 24, 4, viewBg);
+  os->tft_draw_round_rect(262, 2, 56, 24, 4, LAKATOS_CYAN);
   os->tft_set_text_datum(LAKATOS_MC_DATUM);
   os->tft_set_text_color(LAKATOS_WHITE, viewBg);
-  os->tft_draw_string(gState.inBrowserView ? "TRACK" : "FILES", 234, 14, 2);
-
-  // Master Volume indicator / mute-toggle badge [VOL:0..11]
-  int vol = gState.masterVolIdx;
-  if (vol < 0) vol = 0;
-  if (vol > 11) vol = 11;
-  uint16_t volCol = (vol == 0) ? 0x7BEF
-                               : ((vol <= 8) ? LAKATOS_GREEN
-                                             : ((vol <= 10) ? LAKATOS_ORANGE : LAKATOS_RED));
-  os->tft_fill_round_rect(264, 2, 54, 24, 4, 0x0841);
-  os->tft_draw_round_rect(264, 2, 54, 24, 4, volCol);
-  char vbuf[16];
-  snprintf(vbuf, sizeof(vbuf), "VOL:%d", vol);
-  os->tft_set_text_color(volCol, 0x0841);
-  os->tft_draw_string(vbuf, 291, 14, 2);
+  os->tft_draw_string(gState.inBrowserView ? "TRACK" : "FILES", 290, 14, 2);
   os->tft_set_text_datum(LAKATOS_TL_DATUM);
 }
 
@@ -1404,6 +1631,43 @@ static void drawVolumeSliderBar() {
   os->tft_set_text_datum(LAKATOS_TL_DATUM);
 }
 
+static void drawInfoView() {
+  const LakatosApi* os = gState.os;
+  os->tft_fill_rect(0, 28, 320, 148, LAKATOS_BLACK);
+  os->tft_draw_fast_v_line(159, 28, 148, 0x2104);
+
+  os->tft_set_text_datum(LAKATOS_TL_DATUM);
+  int count = gState.songLoaded ? (int)gState.numInstSlots : 0;
+  if (count <= 0) {
+    os->tft_set_text_color(0xBDF7, LAKATOS_BLACK);
+    os->tft_draw_string("No MOD loaded", 12, 92, 2);
+    return;
+  }
+  if (count > 31) count = 31;
+
+  for (int i = 1; i <= count; i++) {
+    int col = (i - 1) / 16;
+    int row = (i - 1) % 16;
+    int x = (col == 0) ? 4 : 163;
+    int y = 30 + row * 9;
+
+    const char* sname = gState.insts[i].name;
+    bool hasText = false;
+    for (int k = 0; sname[k] != '\0'; k++) {
+      if (sname[k] != ' ') {
+        hasText = true;
+        break;
+      }
+    }
+
+    char line[32];
+    snprintf(line, sizeof(line), "%2d:%s", i, sname);
+    line[25] = '\0';
+    os->tft_set_text_color(hasText ? LAKATOS_GREEN : 0x4208, LAKATOS_BLACK);
+    os->tft_draw_string(line, x, y, 1);
+  }
+}
+
 static void drawTransportBar() {
   const LakatosApi* os = gState.os;
   os->tft_fill_rect(0, 208, 320, 32, 0x10A2);
@@ -1415,10 +1679,10 @@ static void drawTransportBar() {
     uint16_t bg;
   };
   Btn btns[4] = {
-      {  4, 68, "|< PREV", 0x2124},
-      { 76, 84, gState.playing ? "PAUSE" : "PLAY", (uint16_t)(gState.playing ? 0x03E0u : 0x8400u)},
-      {164, 68, "NEXT >|", 0x2124},
-      {236, 80, gState.autoNextSong ? "MODE:NEXT" : "MODE:LOOP", 0x18E3},
+      {  4, 74, "|< PREV", 0x2124},
+      { 82, 74, gState.playing ? "PAUSE" : "PLAY", (uint16_t)(gState.playing ? 0x03E0u : 0x8400u)},
+      {160, 74, "INFO", (uint16_t)(gState.inInfoView ? 0x03EFu : 0x2124u)},
+      {238, 78, "NEXT >|", 0x2124},
   };
 
   os->tft_set_text_datum(LAKATOS_MC_DATUM);
@@ -1435,20 +1699,22 @@ static void drawBrowserView() {
   const LakatosApi* os = gState.os;
   os->tft_fill_rect(0, 28, 320, 212, LAKATOS_BLACK);
 
-  // Root & Up navigation bar (y = 30..54)
+  // Root & Bucket navigation bar (y = 30..52)
   struct RootBtn {
     int x, w;
     const char* label;
   };
   static const RootBtn kRoots[4] = {
-      {  4, 58, "/sd"},
-      { 66, 58, "/net"},
-      {128, 64, "/flash"},
-      {196, 54, ".. UP"},
+      {  4, 72, "BUCKETS"},
+      { 80, 56, "/sd"},
+      {140, 56, "/net"},
+      {200, 58, ".. UP"},
   };
   os->tft_set_text_datum(LAKATOS_MC_DATUM);
   for (int i = 0; i < 4; i++) {
-    bool active = (i < 3) && (strncmp(gState.curDir, kRoots[i].label, strlen(kRoots[i].label)) == 0);
+    bool active = (i == 0 && gState.inBucketGrid) ||
+                  (i == 1 && !gState.inBucketGrid && strncmp(gState.curDir, "/sd", 3) == 0) ||
+                  (i == 2 && !gState.inBucketGrid && strncmp(gState.curDir, "/net", 4) == 0);
     uint16_t bg = active ? 0x03EF : 0x2124;
     os->tft_fill_round_rect(kRoots[i].x, 30, kRoots[i].w, 22, 3, bg);
     os->tft_draw_round_rect(kRoots[i].x, 30, kRoots[i].w, 22, 3, LAKATOS_CYAN);
@@ -1456,11 +1722,37 @@ static void drawBrowserView() {
     os->tft_draw_string(kRoots[i].label, kRoots[i].x + kRoots[i].w / 2, 41, 2);
   }
 
-  // Current directory path label (y = 54..68)
+  // Current directory / bucket header label (y = 54..68)
   os->tft_fill_rect(0, 54, 320, 14, 0x0841);
   os->tft_set_text_datum(LAKATOS_ML_DATUM);
   os->tft_set_text_color(LAKATOS_YELLOW, 0x0841);
-  os->tft_draw_string(gState.curDir, 6, 61, 1);
+  if (gState.inBucketGrid) {
+    os->tft_draw_string("Pick /net/mods/ bucket (a-z, 0-9):", 6, 61, 1);
+
+    // 6x6 grid of all 36 single-character buckets (y = 70..238)
+    os->tft_set_text_datum(LAKATOS_MC_DATUM);
+    for (int i = 0; i < 36; i++) {
+      int col = i % 6;
+      int row = i / 6;
+      int bx = 4 + col * 52;
+      int by = 70 + row * 28;
+      char b = kBuckets[i];
+      bool isCur = (b == gState.curBucket);
+      uint16_t bg     = isCur ? 0x1A26 : 0x18E3;
+      uint16_t border = isCur ? LAKATOS_GREEN : LAKATOS_CYAN;
+      os->tft_fill_round_rect(bx, by, 48, 25, 4, bg);
+      os->tft_draw_round_rect(bx, by, 48, 25, 4, border);
+      char lbl[2] = {b, '\0'};
+      os->tft_set_text_color(isCur ? LAKATOS_YELLOW : LAKATOS_WHITE, bg);
+      os->tft_draw_string(lbl, bx + 24, by + 12, 2);
+    }
+    os->tft_set_text_datum(LAKATOS_TL_DATUM);
+    return;
+  }
+
+  char dirHdr[64];
+  snprintf(dirHdr, sizeof(dirHdr), "%s (%d)", gState.curDir, gState.itemCount);
+  os->tft_draw_string(dirHdr, 6, 61, 1);
 
   // File list (8 visible rows, y = 70..230, height 20 px each, width 268 px)
   static constexpr int kRowsPerPage = 8;
@@ -1474,12 +1766,12 @@ static void drawBrowserView() {
       int y = 70 + r * 20;
       if (idx >= gState.itemCount) break;
       const BrowserItem& it = gState.items[idx];
-      bool isCur = (!it.isDir && idx == gState.currentSongItemIdx);
+      bool isCur = (it.kind != ITEM_DIR && idx == gState.currentSongItemIdx);
       uint16_t rowBg = isCur ? 0x18E3 : ((r & 1) ? 0x0841 : LAKATOS_BLACK);
       os->tft_fill_rect(2, y, 266, 19, rowBg);
 
       char line[60];
-      if (it.isDir) {
+      if (it.kind == ITEM_DIR) {
         snprintf(line, sizeof(line), "[DIR] %s/", it.name);
         os->tft_set_text_color(LAKATOS_CYAN, rowBg);
       } else {
@@ -1509,9 +1801,13 @@ static void drawFullScreen() {
   if (gState.inBrowserView) {
     drawBrowserView();
   } else {
-    drawTrackerStatusBar();
-    drawChannelHeadersAndVu(true);
-    drawPatternGrid();
+    if (gState.inInfoView) {
+      drawInfoView();
+    } else {
+      drawTrackerStatusBar();
+      drawChannelHeadersAndVu(true);
+      drawPatternGrid();
+    }
     drawVolumeSliderBar();
     drawTransportBar();
   }
@@ -1525,7 +1821,7 @@ extern "C" void app_main(const LakatosApi* os) {
   gState.os                 = os;
   gState.numChans           = 4;
   gState.fileChans          = 4;
-  gState.masterVolIdx       = 7; // Default level 7 on 0..11 scale (8 = unity, 9..11 = overdrive)
+  gState.masterVolIdx       = 3; // Default level 3 on 0..11 scale (8 = unity, 9..11 = overdrive)
   gState.autoNextSong       = true;
   gState.currentSongItemIdx = -1;
 
@@ -1533,19 +1829,24 @@ extern "C" void app_main(const LakatosApi* os) {
   os->audio_start();
   os->set_rgb_led(true, false, false, 0);
 
-  // Choose initial directory (/sd/mods -> /net/mods -> /sd -> /net)
-  const char* candidateDirs[4] = {"/sd/mods", "/net/mods", "/sd", "/net"};
-  for (int i = 0; i < 4; i++) {
-    loadDirectory(candidateDirs[i]);
-    if (gState.itemCount > 0) break;
+  // Default play behavior: pick a random /net/mods/<bucket>, choose 5 random songs, play them
+  bool startedSong = false;
+  if (pickRandomBucketAndQueue()) {
+    startedSong = playQueuedRandomSong(false);
   }
-  if (gState.curDir[0] == '\0') {
-    loadDirectory("/sd");
+  if (!startedSong) {
+    const char* candidateDirs[4] = {"/sd/mods", "/net/mods", "/sd", "/net"};
+    for (int i = 0; i < 4; i++) {
+      loadDirectory(candidateDirs[i]);
+      if (gState.itemCount > 0) break;
+    }
+    if (gState.curDir[0] == '\0') {
+      loadDirectory("/sd");
+    }
+    startedSong = playAdjacentSong(1);
   }
-
-  // Auto-load the first available .mod / .mod.zip in the initial folder if present
-  bool startedSong = playAdjacentSong(1);
   gState.inBrowserView = !startedSong;
+  gState.inBucketGrid  = true;
   drawFullScreen();
 
   int lastDrawnOrd = -1;
@@ -1553,7 +1854,6 @@ extern "C" void app_main(const LakatosApi* os) {
   uint32_t lastVuDrawMs = 0;
   bool touchHeld = false;
   bool draggingVolSlider = false;
-  int savedVolBeforeMute = 7;
 
   for (;;) {
     while (os->serial_available() > 0) {
@@ -1580,7 +1880,7 @@ extern "C" void app_main(const LakatosApi* os) {
     }
 
     uint32_t nowMs = os->millis();
-    if (!gState.inBrowserView && gState.songLoaded) {
+    if (!gState.inBrowserView && !gState.inInfoView && gState.songLoaded) {
       int ord = gState.curOrder;
       int row = getDisplayRow();
       if (ord != lastDrawnOrd || row != lastDrawnRow) {
@@ -1611,10 +1911,8 @@ extern "C" void app_main(const LakatosApi* os) {
         if (newVol > 11) newVol = 11;
         if (newVol != gState.masterVolIdx) {
           gState.masterVolIdx = newVol;
-          if (newVol > 0) savedVolBeforeMute = newVol;
           applyMasterVolumeImmediate();
           drawVolumeSliderBar();
-          drawTopHeader();
         }
       } else if (!touchHeld) {
         touchHeld = true;
@@ -1626,45 +1924,56 @@ extern "C" void app_main(const LakatosApi* os) {
             os->audio_stop();
             os->set_rgb_led(false, false, false, 0);
             os->exit(0);
-          } else if (tx >= 204 && tx <= 262) {
+          } else if (tx >= 260) {
             gState.inBrowserView = !gState.inBrowserView;
+            if (gState.inBrowserView && gState.randomBucketMode) {
+              gState.inBucketGrid = true;
+            }
             lastDrawnOrd = -1;
             lastDrawnRow = -1;
             drawFullScreen();
-          } else if (tx >= 263) {
-            if (gState.masterVolIdx > 0) {
-              savedVolBeforeMute = gState.masterVolIdx;
-              gState.masterVolIdx = 0;
-            } else {
-              gState.masterVolIdx = (savedVolBeforeMute > 0) ? savedVolBeforeMute : 7;
-            }
-            applyMasterVolumeImmediate();
-            drawTopHeader();
-            if (!gState.inBrowserView) {
-              drawVolumeSliderBar();
-            }
           }
         } else if (gState.inBrowserView) {
           // 2. Browser View Touch Handling
           if (ty >= 28 && ty <= 54) {
-            if (tx < 64) {
+            if (tx < 78) {
+              gState.inBucketGrid = true;
+              drawBrowserView();
+            } else if (tx < 138) {
+              gState.inBucketGrid = false;
+              gState.randomBucketMode = false;
               loadDirectory("/sd");
               gState.currentSongItemIdx = -1;
               drawBrowserView();
-            } else if (tx < 126) {
+            } else if (tx < 198) {
+              gState.inBucketGrid = false;
+              gState.randomBucketMode = false;
               loadDirectory("/net");
               gState.currentSongItemIdx = -1;
               drawBrowserView();
-            } else if (tx < 194) {
-              loadDirectory("/flash");
-              gState.currentSongItemIdx = -1;
-              drawBrowserView();
-            } else if (tx <= 256) {
+            } else if (tx <= 260) {
+              gState.inBucketGrid = false;
+              gState.randomBucketMode = false;
               navigateParentDir();
               gState.currentSongItemIdx = -1;
               drawBrowserView();
             }
-          } else if (ty >= 70 && tx >= 270) {
+          } else if (gState.inBucketGrid && ty >= 70 && ty < 238) {
+            int col = (tx - 4) / 52;
+            int row = (ty - 70) / 28;
+            if (col >= 0 && col < 6 && row >= 0 && row < 6) {
+              int bIdx = row * 6 + col;
+              char b = kBuckets[bIdx];
+              char dirPath[32];
+              snprintf(dirPath, sizeof(dirPath), "/net/mods/%c", b);
+              gState.curBucket = b;
+              gState.inBucketGrid = false;
+              gState.randomBucketMode = false;
+              loadDirectory(dirPath);
+              gState.currentSongItemIdx = -1;
+              drawBrowserView();
+            }
+          } else if (!gState.inBucketGrid && ty >= 70 && tx >= 270) {
             if (ty < 150) {
               if (gState.scrollTop >= 8) gState.scrollTop -= 8;
               else gState.scrollTop = 0;
@@ -1673,18 +1982,14 @@ extern "C" void app_main(const LakatosApi* os) {
               if (gState.scrollTop + 8 < gState.itemCount) gState.scrollTop += 8;
               drawBrowserView();
             }
-          } else if (ty >= 70 && ty < 230 && tx < 268) {
+          } else if (!gState.inBucketGrid && ty >= 70 && ty < 230 && tx < 268) {
             int rowIdx = (ty - 70) / 20;
             int itemIdx = gState.scrollTop + rowIdx;
             if (itemIdx >= 0 && itemIdx < gState.itemCount) {
               const BrowserItem& it = gState.items[itemIdx];
               char nextPath[192];
-              if (strcmp(gState.curDir, "/") == 0) {
-                snprintf(nextPath, sizeof(nextPath), "/%s", it.name);
-              } else {
-                snprintf(nextPath, sizeof(nextPath), "%s/%s", gState.curDir, it.name);
-              }
-              if (it.isDir) {
+              buildItemFullPath(it, nextPath, sizeof(nextPath));
+              if (it.kind == ITEM_DIR) {
                 loadDirectory(nextPath);
                 gState.currentSongItemIdx = -1;
                 drawBrowserView();
@@ -1698,6 +2003,9 @@ extern "C" void app_main(const LakatosApi* os) {
 
                 if (loadAndPlayModFile(nextPath, it.name)) {
                   gState.currentSongItemIdx = itemIdx;
+                  char bkt = (strncmp(gState.curDir, "/net/mods/", 10) == 0) ? gState.curDir[10] : 0;
+                  gState.currentSongBucket  = bkt;
+                  recordHistoryEntry(gState.curDir, it.name, bkt, it.kind);
                   gState.inBrowserView = false;
                   lastDrawnOrd = -1;
                   lastDrawnRow = -1;
@@ -1710,8 +2018,8 @@ extern "C" void app_main(const LakatosApi* os) {
             }
           }
         } else {
-          // 3. Tracker View Touch Handling
-          if (ty >= 50 && ty < 78) {
+          // 3. Tracker / Info View Touch Handling
+          if (!gState.inInfoView && ty >= 50 && ty < 78) {
             // Channel Header Mute Toggle (CH1..CH8)
             int nCols = (gState.songLoaded && gState.numChans > 4) ? gState.numChans : 4;
             if (nCols > 8) nCols = 8;
@@ -1726,14 +2034,14 @@ extern "C" void app_main(const LakatosApi* os) {
               drawPatternGrid();
             }
           } else if (ty >= 208) {
-            // Bottom Transport Controls
-            if (tx < 74) {
+            // Bottom Transport Controls: [|< PREV] (4..78), [PAUSE/PLAY] (82..156), [INFO] (160..234), [NEXT >|] (238..316)
+            if (tx < 80) {
               if (playAdjacentSong(-1)) {
                 lastDrawnOrd = -1;
                 lastDrawnRow = -1;
                 drawFullScreen();
               }
-            } else if (tx < 162) {
+            } else if (tx < 158) {
               gState.playing = !gState.playing;
               if (!gState.playing) {
                 for (int c = 0; c < 8; c++) {
@@ -1741,15 +2049,17 @@ extern "C" void app_main(const LakatosApi* os) {
                 }
               }
               drawTransportBar();
-            } else if (tx < 234) {
+            } else if (tx < 236) {
+              gState.inInfoView = !gState.inInfoView;
+              lastDrawnOrd = -1;
+              lastDrawnRow = -1;
+              drawFullScreen();
+            } else {
               if (playAdjacentSong(1)) {
                 lastDrawnOrd = -1;
                 lastDrawnRow = -1;
                 drawFullScreen();
               }
-            } else {
-              gState.autoNextSong = !gState.autoNextSong;
-              drawTransportBar();
             }
           }
         }
