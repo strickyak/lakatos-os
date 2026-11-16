@@ -7,13 +7,14 @@ REQ ?= $(shell date +%s)
 MKLITTLEFS ?= $(HOME)/.platformio/packages/tool-mklittlefs/mklittlefs
 BOOT_APP0 ?= $(HOME)/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin
 
-.PHONY: all push lakatos build-lakatos web-installer lakat apps demo1 demo2 build-demo1 build-demo2 monitor cf wipe clean
+.PHONY: all push push-to-net lakatos build-lakatos web-installer lakat apps demo1 demo2 build-demo1 build-demo2 monitor cf wipe clean
 
 all:
 	@echo "================================================================"
 	@echo "  YakFace Makefile Targets"
 	@echo "================================================================"
 	@echo "  make push           Build and push: lakatos & apps"
+	@echo "  make push-to-net    Build all and push kernel, native.bin, apps, subapps to /net"
 	@echo "  make lakatos        Build LCode .lapp apps, compile & upload Lakatos OS"
 	@echo "  make cf             Write config from $(SECRETS) to attached CYD"
 	@echo "  make build-lakatos  Build LCode .lapp apps & compile Lakatos OS"
@@ -32,6 +33,12 @@ all:
 push: lakatos
 	$(LAKAT) push build/apps/*.lapp build/apps/native.bin /sd/apps/
 	$(LAKAT) push build/subapps/*.sapp /sd/subapps/
+
+push-to-net: build-lakatos
+	$(LAKAT) push build/apps/lakatos.krn /net/apps/
+	$(LAKAT) push build/apps/native.bin /net/apps/
+	$(LAKAT) push build/apps/*.lapp /net/apps/
+	$(LAKAT) push build/subapps/*.sapp /net/subapps/
 
 lakat:
 	mkdir -p build build/flash build/sd build/net

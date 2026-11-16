@@ -848,9 +848,11 @@ func TestCompileAndRunBasicApp(t *testing.T) {
 		// Click line 2 (20 CLS 0) at y=40 to open ASCII keyboard line editor directly
 		{Touched: true, X: 100, Y: 40},
 		{Touched: false, X: 100, Y: 40},
-		// Click SAVE in top bar at (290, 10)
-		{Touched: true, X: 290, Y: 10},
-		{Touched: false, X: 290, Y: 10},
+		// Open top-right Menu Wedge at (312, 6), then tap SAVE at (260, 68)
+		{Touched: true, X: 312, Y: 6},
+		{Touched: false, X: 312, Y: 6},
+		{Touched: true, X: 260, Y: 68},
+		{Touched: false, X: 260, Y: 68},
 		// Click RUN in top bar at (65, 10)
 		{Touched: true, X: 65, Y: 10},
 		{Touched: false, X: 65, Y: 10},
@@ -907,9 +909,11 @@ func TestCompileAndRunLogoApp(t *testing.T) {
 		// Click line 2 (CS) at y=40 to open ASCII keyboard line editor directly
 		{Touched: true, X: 100, Y: 40},
 		{Touched: false, X: 100, Y: 40},
-		// Click SAVE in top bar at (290, 10)
-		{Touched: true, X: 290, Y: 10},
-		{Touched: false, X: 290, Y: 10},
+		// Open top-right Menu Wedge at (312, 6), then tap SAVE at (260, 68)
+		{Touched: true, X: 312, Y: 6},
+		{Touched: false, X: 312, Y: 6},
+		{Touched: true, X: 260, Y: 68},
+		{Touched: false, X: 260, Y: 68},
 		// Click RUN in top bar at (65, 10)
 		{Touched: true, X: 65, Y: 10},
 		{Touched: false, X: 65, Y: 10},

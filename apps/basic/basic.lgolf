@@ -631,43 +631,38 @@ func drawTopBar() {
 	tft_fill_rect(0, 0, SCREEN_W, TOP_H, UI_TOP_BG)
 	tft_draw_fast_hline(0, TOP_H-1, SCREEN_W, UI_BORDER)
 
-	// Top-left NW corner X mark (sized by CornerSize(): 12..24)
+	// Top-left NW corner X mark and top-right NE menu wedge (sized by CornerSize(): 8..24)
 	DrawExitWedge()
+	DrawMenuWedge()
 	cs := CornerSize()
 	runX := cs + 2
 	if runX < 16 {
 		runX = 16
 	}
-	runW := 73 - runX
+	runW := 104 - runX
 
-	// [RUN] (x = runX..73)
+	// [RUN] (x = runX..104)
 	runBg := UI_BTN_RUN
 	if isRunning != 0 {
 		runBg = 0x05E0
 	}
 	drawButton(runX, 2, runW, 19, runBg, GREEN, WHITE, "RUN")
 
-	// [STOP] (x = 76..133)
+	// [STOP] (x = 108..194)
 	stopBg := UI_BTN_STOP
 	stopBorder := RED
 	if isRunning != 0 {
 		stopBg = RED
 		stopBorder = YELLOW
 	}
-	drawButton(76, 2, 57, 19, stopBg, stopBorder, WHITE, "STOP")
+	drawButton(108, 2, 86, 19, stopBg, stopBorder, WHITE, "STOP")
 
-	// [EDIT] (x = 136..193)
+	// [EDIT] (x = 198..288)
 	editBg := UI_BTN_EDIT
 	if uiMode == MODE_EDIT {
 		editBg = 0x4228
 	}
-	drawButton(136, 2, 57, 19, editBg, YELLOW, YELLOW, "EDIT")
-
-	// [LOAD] (x = 196..253)
-	drawButton(196, 2, 57, 19, UI_BTN_LOAD, CYAN, CYAN, "LOAD")
-
-	// [SAVE] (x = 256..317)
-	drawButton(256, 2, 61, 19, UI_BTN_SAVE, MAGENTA, WHITE, "SAVE")
+	drawButton(198, 2, 90, 19, editBg, YELLOW, YELLOW, "EDIT")
 }
 
 func drawStatusStrip() {
@@ -2035,18 +2030,71 @@ func stepBasicInterpreter() {
 // ============================================================================
 // Top-Bar & Screen Click Dispatch
 // ============================================================================
+func newBasicProgram() {
+	lineCount = 0
+	selectedLine = 0
+	scrollTop = 0
+	setCStrLiteral(&fileNameBuf[0], "NEW.BAS", 32)
+	setStatus("Cleared program (NEW)", 0)
+}
+
+func runTopRightMenu() {
+	s := CornerSize()
+	menuY := s
+	if menuY < 24 {
+		menuY = 24
+	}
+	tft_fill_round_rect(204, menuY, 114, 90, 5, 0x10A2)
+	tft_draw_round_rect(204, menuY, 114, 90, 5, CYAN)
+
+	drawButton(208, menuY+3, 106, 25, UI_BTN_LOAD, CYAN, WHITE, "LOAD")
+	drawButton(208, menuY+32, 106, 25, UI_BTN_SAVE, MAGENTA, WHITE, "SAVE")
+	drawButton(208, menuY+61, 106, 25, 0x3800, YELLOW, YELLOW, "NEW")
+	settleModalTransition()
+
+	for {
+		clicked, tx, ty := pollFilteredClick()
+		if clicked {
+			if tx >= 204 && tx <= 318 && ty >= menuY+2 && ty < menuY+88 {
+				itemIdx := (ty - (menuY + 3)) / 29
+				isRunning = 0
+				uiMode = MODE_EDIT
+				if itemIdx == 0 {
+					runLoadDialog()
+				} else if itemIdx == 1 {
+					runSaveDialog()
+				} else if itemIdx == 2 {
+					newBasicProgram()
+				}
+			} else {
+				uiMode = MODE_EDIT
+			}
+			settleModalTransition()
+			drawEditorScreen()
+			return
+		}
+		os_delay_ms(15)
+	}
+}
+
 func handleTopBarClick(tx int) {
 	cs := CornerSize()
 	if tx < cs {
 		os_exit(0)
 		return
 	}
-	if tx >= cs && tx <= 73 {
+	if tx >= 320-cs || tx >= 292 {
+		// Top-right NE Menu Wedge -> LOAD / SAVE / NEW dropdown
+		isRunning = 0
+		runTopRightMenu()
+		return
+	}
+	if tx >= cs && tx <= 105 {
 		// [RUN]
 		startBasicRun()
 		return
 	}
-	if tx >= 76 && tx <= 133 {
+	if tx >= 107 && tx <= 195 {
 		// [STOP]
 		if isRunning != 0 {
 			isRunning = 0
@@ -2062,7 +2110,7 @@ func handleTopBarClick(tx int) {
 		}
 		return
 	}
-	if tx >= 136 && tx <= 193 {
+	if tx >= 197 && tx <= 290 {
 		// [EDIT]
 		isRunning = 0
 		if uiMode == MODE_RUN {
@@ -2072,22 +2120,6 @@ func handleTopBarClick(tx int) {
 			runLineEditorModal(selectedLine)
 			drawEditorScreen()
 		}
-		return
-	}
-	if tx >= 196 && tx <= 253 {
-		// [LOAD]
-		isRunning = 0
-		uiMode = MODE_EDIT
-		runLoadDialog()
-		drawEditorScreen()
-		return
-	}
-	if tx >= 256 {
-		// [SAVE]
-		isRunning = 0
-		uiMode = MODE_EDIT
-		runSaveDialog()
-		drawEditorScreen()
 		return
 	}
 }
