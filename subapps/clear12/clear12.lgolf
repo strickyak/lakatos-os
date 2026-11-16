@@ -1,0 +1,26 @@
+package main
+
+// clear12: Inside-out expanding circle iris from center (1 second).
+
+func checkCancel() bool {
+	if os_serial_available() > 0 {
+		ch := os_serial_read()
+		if ch == 'q' || ch == 'Q' || ch == 3 {
+			return true
+		}
+	}
+	clicked, _, _ := os_read_click()
+	return clicked != 0
+}
+
+func main() {
+	for step := 1; step <= 40; step = step + 1 {
+		if checkCancel() {
+			os_exit(0)
+		}
+		os_tft_fill_circle(160, 120, step*5, 0x0000)
+		os_delay_ms(25)
+	}
+	os_tft_fill_screen(0x0000)
+	os_exit(0)
+}

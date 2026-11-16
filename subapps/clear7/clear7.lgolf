@@ -1,0 +1,34 @@
+package main
+
+// clear7: Interleaved vertical comb (even columns wipe down, odd columns wipe up in 1 second).
+
+func checkCancel() bool {
+	if os_serial_available() > 0 {
+		ch := os_serial_read()
+		if ch == 'q' || ch == 'Q' || ch == 3 {
+			return true
+		}
+	}
+	clicked, _, _ := os_read_click()
+	return clicked != 0
+}
+
+func main() {
+	for step := 0; step < 40; step = step + 1 {
+		if checkCancel() {
+			os_exit(0)
+		}
+		yDown := step * 6
+		yUp := 240 - (step+1)*6
+		for col := 0; col < 20; col = col + 1 {
+			if col%2 == 0 {
+				os_tft_fill_rect(col*16, yDown, 16, 6, 0x0000)
+			} else {
+				os_tft_fill_rect(col*16, yUp, 16, 6, 0x0000)
+			}
+		}
+		os_delay_ms(25)
+	}
+	os_tft_fill_screen(0x0000)
+	os_exit(0)
+}

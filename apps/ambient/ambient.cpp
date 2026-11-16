@@ -268,7 +268,12 @@ static void drawAmbientConfigPanel() {
   os->tft_draw_round_rect(182, 66, 114, 24, 4, LAKATOS_CYAN);
   os->tft_set_text_datum(LAKATOS_MC_DATUM);
   os->tft_set_text_color(LAKATOS_YELLOW, 0x18E3);
-  os->tft_draw_string(stopBadgeLabel(S.slideStopIdx), 239, 78, 2);
+  const char* badgeStr = stopBadgeLabel(S.slideStopIdx);
+  if (S.slideSec != stopSeconds(S.slideStopIdx)) {
+    snprintf(S.cfgBuf, sizeof(S.cfgBuf), "%d sec", S.slideSec);
+    badgeStr = S.cfgBuf;
+  }
+  os->tft_draw_string(badgeStr, 239, 78, 2);
 
   int trackX0 = 35;
   int stepX   = 50;

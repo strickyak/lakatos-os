@@ -1,0 +1,49 @@
+package main
+
+// clear5: Clears 16x12 checkerboard of 20x20 squares in random order (1 second).
+
+const COLS = 16
+const ROWS = 12
+const TOTAL = 192
+
+var order [TOTAL]int
+
+func checkCancel() bool {
+	if os_serial_available() > 0 {
+		ch := os_serial_read()
+		if ch == 'q' || ch == 'Q' || ch == 3 {
+			return true
+		}
+	}
+	clicked, _, _ := os_read_click()
+	return clicked != 0
+}
+
+func main() {
+	for i := 0; i < TOTAL; i = i + 1 {
+		order[i] = i
+	}
+	for i := TOTAL - 1; i > 0; i = i - 1 {
+		j := int(os_rand(i + 1))
+		tmp := order[i]
+		order[i] = order[j]
+		order[j] = tmp
+	}
+
+	idx := 0
+	for step := 0; step < 48; step = step + 1 {
+		if checkCancel() {
+			os_exit(0)
+		}
+		for k := 0; k < 4; k = k + 1 {
+			cell := order[idx]
+			idx = idx + 1
+			c := cell % COLS
+			r := cell / COLS
+			os_tft_fill_rect(c*20, r*20, 20, 20, 0x0000)
+		}
+		os_delay_ms(21)
+	}
+	os_tft_fill_screen(0x0000)
+	os_exit(0)
+}

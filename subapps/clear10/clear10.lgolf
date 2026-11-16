@@ -1,0 +1,27 @@
+package main
+
+// clear10: Diagonal wipe from top-left (NW) to bottom-right (SE) in 1 second.
+
+func checkCancel() bool {
+	if os_serial_available() > 0 {
+		ch := os_serial_read()
+		if ch == 'q' || ch == 'Q' || ch == 3 {
+			return true
+		}
+	}
+	clicked, _, _ := os_read_click()
+	return clicked != 0
+}
+
+func main() {
+	for step := 1; step <= 40; step = step + 1 {
+		if checkCancel() {
+			os_exit(0)
+		}
+		d := step * 14
+		os_tft_fill_triangle(0, 0, d, 0, 0, d, 0x0000)
+		os_delay_ms(25)
+	}
+	os_tft_fill_screen(0x0000)
+	os_exit(0)
+}

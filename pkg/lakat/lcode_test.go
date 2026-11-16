@@ -1724,6 +1724,49 @@ func TestColorSliceSubApp(t *testing.T) {
 	}
 }
 
+func TestClearSubApps(t *testing.T) {
+	for i := 1; i <= 12; i++ {
+		name := fmt.Sprintf("clear%d", i)
+		path := fmt.Sprintf("../../subapps/%s/%s.lgolf", name, name)
+		srcBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", path, err)
+		}
+		sapp, asmText, err := CompileToLapp(name, string(srcBytes))
+		if err != nil {
+			t.Fatalf("CompileToLapp %s: %v\nASM:\n%s", name, err, asmText)
+		}
+		vm, err := NewVM(sapp)
+		if err != nil {
+			t.Fatalf("NewVM %s: %v", name, err)
+		}
+		for y := 0; y < 240; y++ {
+			for x := 0; x < 320; x++ {
+				vm.Screen[y][x] = 0xFFFF
+			}
+		}
+		vm.MaxInstructions = 4000000
+
+		if _, err := vm.Run(); err != nil {
+			t.Fatalf("VM Run %s: %v", name, err)
+		}
+		if vm.Running {
+			t.Fatalf("%s did not exit cleanly", name)
+		}
+		if vm.VirtualMs < 950 || vm.VirtualMs > 1050 {
+			t.Fatalf("expected %s to take ~1000ms, got %dms", name, vm.VirtualMs)
+		}
+		for y := 0; y < 240; y++ {
+			for x := 0; x < 320; x++ {
+				if vm.Screen[y][x] != 0x0000 {
+					t.Fatalf("expected %s to clear pixel (%d,%d) to 0x0000, got 0x%04X", name, x, y, vm.Screen[y][x])
+				}
+			}
+		}
+	}
+}
+
+
 
 
 

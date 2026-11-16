@@ -1,0 +1,28 @@
+package main
+
+// clear6: Horizontal Venetian blinds (12 slats closing simultaneously in 1 second).
+
+func checkCancel() bool {
+	if os_serial_available() > 0 {
+		ch := os_serial_read()
+		if ch == 'q' || ch == 'Q' || ch == 3 {
+			return true
+		}
+	}
+	clicked, _, _ := os_read_click()
+	return clicked != 0
+}
+
+func main() {
+	for row := 0; row < 20; row = row + 1 {
+		if checkCancel() {
+			os_exit(0)
+		}
+		for slat := 0; slat < 12; slat = slat + 1 {
+			os_tft_fill_rect(0, slat*20+row, 320, 1, 0x0000)
+		}
+		os_delay_ms(50)
+	}
+	os_tft_fill_screen(0x0000)
+	os_exit(0)
+}

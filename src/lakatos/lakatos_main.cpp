@@ -1645,7 +1645,8 @@ static void stepAmbientMode() {
   char appPath[128];
   const char* ambName = lakatosGetAmbientApp();
   if (!resolveAppVfsPathByName(ambName, appPath, sizeof(appPath))) {
-    if (!resolveAppVfsPathByName("gallery", appPath, sizeof(appPath))) {
+    if (!resolveAppVfsPathByName("ambient", appPath, sizeof(appPath)) &&
+        !resolveAppVfsPathByName("gallery", appPath, sizeof(appPath))) {
       lakatosSetActivityMode(LAKATOS_MODE_ACTIVE);
       gLastHomeActivityMs = millis();
       refreshActiveScreen();
@@ -2323,7 +2324,8 @@ void loop() {
   }
 
   bool wifiNow = lakatosWifiIsConnected();
-  if (gScreenMode == SCREEN_HOME && wifiNow && !gHomeScannedWifi) {
+  bool netReadyNow = wifiNow && (strlen(lakatosGetSuperhighwayPassword()) > 0);
+  if (gScreenMode == SCREEN_HOME && netReadyNow && !gHomeScannedWifi) {
     gShellNeedsRefresh = true;
   }
 

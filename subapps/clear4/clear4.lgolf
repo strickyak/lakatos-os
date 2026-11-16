@@ -1,0 +1,35 @@
+package main
+
+// clear4: Outside-in closing rectangular iris from borders to center (1 second).
+
+func checkCancel() bool {
+	if os_serial_available() > 0 {
+		ch := os_serial_read()
+		if ch == 'q' || ch == 'Q' || ch == 3 {
+			return true
+		}
+	}
+	clicked, _, _ := os_read_click()
+	return clicked != 0
+}
+
+func main() {
+	for step := 0; step < 40; step = step + 1 {
+		if checkCancel() {
+			os_exit(0)
+		}
+		x := step * 4
+		y := step * 3
+		w := 320 - x*2
+		h := 240 - y*2
+		// Top and bottom strips of current ring
+		os_tft_fill_rect(x, y, w, 3, 0x0000)
+		os_tft_fill_rect(x, 240-y-3, w, 3, 0x0000)
+		// Left and right strips of current ring
+		os_tft_fill_rect(x, y, 4, h, 0x0000)
+		os_tft_fill_rect(320-x-4, y, 4, h, 0x0000)
+		os_delay_ms(25)
+	}
+	os_tft_fill_screen(0x0000)
+	os_exit(0)
+}

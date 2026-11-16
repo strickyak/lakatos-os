@@ -1,3 +1,4 @@
+#include "lakatos_graffiti.h"
 #include "lakatos_state.h"
 #include "lakatos_version.h"
 #include <FS.h>
@@ -19,6 +20,7 @@
 // ---------------------------------------------------------------------------
 struct TouchCalibration {
   bool  swapXY = false;
+  bool  kbGraf = false;
   float uAtX1  = 650.0f;
   float uAtX2  = 3350.0f;
   float vAtY1  = 980.0f;
@@ -145,10 +147,10 @@ static bool   gTouchSpotEnabled = false;
 static int    gCornerSize      = 24;
 
 static int    gActivityMode    = LAKATOS_MODE_ACTIVE;
-static char   gAmbientApp[32]  = "gallery";
+static char   gAmbientApp[32]  = "ambient";
 static int    gAmbientSec      = 60;
 static int    gDemoSec         = 60;
-static int    gActiveIdleSec   = 300;
+static int    gActiveIdleSec   = 120;
 
 static void applyAirportCode(const char* code) {
   char up[4] = {'S', 'F', 'O', '\0'};
@@ -207,10 +209,11 @@ static void saveConfigToNvs() {
   prefs.putString("serialNo", gSerialNo);
   prefs.putString("shUrl", gShUrl);
   prefs.putString("shPass", gShPass);
-  prefs.putString("ambApp", gAmbientApp);
+  prefs.putString("ambApp2", gAmbientApp);
   prefs.putInt("ambSec", gAmbientSec);
   prefs.putInt("demoSec", gDemoSec);
-  prefs.putInt("idleSec", gActiveIdleSec);
+  prefs.putInt("idleSec2", gActiveIdleSec);
+  prefs.putBool("kbGraf", gCal.kbGraf);
   prefs.end();
 }
 
@@ -241,10 +244,11 @@ void initLakatosConfig() {
   String savedSer  = prefs.getString("serialNo", "");
   String savedUrl  = prefs.getString("shUrl", "http://pizga.net:1908/");
   String savedPass = prefs.getString("shPass", "");
-  String savedAmb  = prefs.getString("ambApp", "gallery");
+  String savedAmb  = prefs.getString("ambApp2", "ambient");
   gAmbientSec      = constrain((int)prefs.getInt("ambSec", 60), 1, 86400);
   gDemoSec         = constrain((int)prefs.getInt("demoSec", 60), 5, 3600);
-  gActiveIdleSec   = constrain((int)prefs.getInt("idleSec", 300), 0, 86400);
+  gActiveIdleSec   = constrain((int)prefs.getInt("idleSec2", 120), 0, 86400);
+  gCal.kbGraf      = prefs.getBool("kbGraf", false);
   prefs.end();
   gTouchSpotEnabled = false;
   gActivityMode     = LAKATOS_MODE_ACTIVE;
@@ -253,7 +257,7 @@ void initLakatosConfig() {
     strncpy(gAmbientApp, savedAmb.c_str(), sizeof(gAmbientApp) - 1);
     gAmbientApp[sizeof(gAmbientApp) - 1] = '\0';
   } else {
-    strcpy(gAmbientApp, "gallery");
+    strcpy(gAmbientApp, "ambient");
   }
 
   strncpy(gDeviceName, savedDev.c_str(), sizeof(gDeviceName) - 1);
@@ -438,7 +442,7 @@ const char* lakatosGetAmbientApp() {
 
 void lakatosSetAmbientApp(const char* appName) {
   if (!appName || !appName[0]) {
-    strcpy(gAmbientApp, "gallery");
+    strcpy(gAmbientApp, "ambient");
   } else {
     strncpy(gAmbientApp, appName, sizeof(gAmbientApp) - 1);
     gAmbientApp[sizeof(gAmbientApp) - 1] = '\0';
@@ -505,18 +509,53 @@ static const char* const KB_ROWS[3][4] = {
   { "!@#$%^&*()", "-_=+[]{}\\|", ";:'\",.<>/?", "`~$%&*+=-_" }
 };
 
-static void drawKbInputBox(const String& text) {
-  LakatosTftGuard tftLock;
-  tft.fillRoundRect(4, 28, 246, 30, 4, TFT_BLACK);
-  tft.drawRoundRect(4, 28, 246, 30, 4, TFT_CYAN);
+static void drawKbInputBox(const String& text, int& cursor, int& viewStart,
+                           int* outViewEnd = nullptr) {
+  constexpr int kTextX0   = 20;
+  constexpr int kTextMaxW = 278;
 
-  String shown = text + "_";
-  if (shown.length() > 26) {
-    shown = ".." + shown.substring(shown.length() - 25);
+  int len = (int)text.length();
+  if (cursor < 0) cursor = 0;
+  if (cursor > len) cursor = len;
+  if (viewStart < 0) viewStart = 0;
+  if (viewStart > cursor) viewStart = cursor;
+
+  LakatosTftGuard tftLock;
+  while (viewStart < cursor &&
+         tft.textWidth(text.substring(viewStart, cursor), 2) > kTextMaxW) {
+    viewStart++;
   }
-  tft.setTextDatum(ML_DATUM);
+  while (viewStart > 0 &&
+         tft.textWidth(text.substring(viewStart - 1, len), 2) <= kTextMaxW) {
+    viewStart--;
+  }
+
+  int viewEnd = viewStart;
+  while (viewEnd < len &&
+         tft.textWidth(text.substring(viewStart, viewEnd + 1), 2) <= kTextMaxW) {
+    viewEnd++;
+  }
+  if (outViewEnd) *outViewEnd = viewEnd;
+
+  tft.fillRoundRect(4, 28, 312, 30, 4, TFT_BLACK);
+  tft.drawRoundRect(4, 28, 312, 30, 4, TFT_CYAN);
+
+  if (viewStart > 0) {
+    tft.fillTriangle(8, 43, 16, 36, 16, 50, TFT_YELLOW);
+  }
+  if (viewEnd < len) {
+    tft.fillTriangle(311, 43, 303, 36, 303, 50, TFT_YELLOW);
+  }
+
+  String visible = text.substring(viewStart, viewEnd);
+  tft.setTextDatum(TL_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString(shown, 10, 43, 2);
+  tft.drawString(visible, kTextX0, 31, 2);
+
+  int cursorPx = kTextX0 + tft.textWidth(text.substring(viewStart, cursor), 2);
+  if (cursorPx < kTextX0) cursorPx = kTextX0;
+  if (cursorPx > kTextX0 + kTextMaxW) cursorPx = kTextX0 + kTextMaxW;
+  tft.fillTriangle(cursorPx, 48, cursorPx - 4, 55, cursorPx + 4, 55, TFT_CYAN);
 }
 
 static void drawKbGrid(int page) {
@@ -539,27 +578,138 @@ static void drawKbGrid(int page) {
 
   int by = 205, bh = 32;
   uint16_t shiftCol = (page == 1) ? TFT_YELLOW : 0x2945;
-  tft.fillRoundRect(2, by, 66, bh, 4, shiftCol);
-  tft.drawRoundRect(2, by, 66, bh, 4, TFT_YELLOW);
+  tft.fillRoundRect(2, by, 54, bh, 4, shiftCol);
+  tft.drawRoundRect(2, by, 54, bh, 4, TFT_YELLOW);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor((page == 1) ? TFT_BLACK : TFT_YELLOW, shiftCol);
-  tft.drawString((page == 1) ? "abc" : "ABC", 35, by + 16, 2);
+  tft.drawString((page == 1) ? "abc" : "ABC", 29, by + 16, 2);
 
   uint16_t symCol = (page == 2) ? TFT_MAGENTA : 0x2945;
-  tft.fillRoundRect(72, by, 62, bh, 4, symCol);
-  tft.drawRoundRect(72, by, 62, bh, 4, TFT_MAGENTA);
+  tft.fillRoundRect(60, by, 54, bh, 4, symCol);
+  tft.drawRoundRect(60, by, 54, bh, 4, TFT_MAGENTA);
   tft.setTextColor((page == 2) ? TFT_BLACK : TFT_MAGENTA, symCol);
-  tft.drawString((page == 2) ? "abc" : "#+=", 103, by + 16, 2);
+  tft.drawString((page == 2) ? "abc" : "#+=", 87, by + 16, 2);
 
-  tft.fillRoundRect(138, by, 90, bh, 4, 0x18E3);
-  tft.drawRoundRect(138, by, 90, bh, 4, TFT_WHITE);
+  tft.fillRoundRect(118, by, 78, bh, 4, 0x18E3);
+  tft.drawRoundRect(118, by, 78, bh, 4, TFT_WHITE);
   tft.setTextColor(TFT_WHITE, 0x18E3);
-  tft.drawString("SPACE", 183, by + 16, 2);
+  tft.drawString("SPACE", 157, by + 16, 2);
 
-  tft.fillRoundRect(232, by, 85, bh, 4, TFT_DARKGREEN);
-  tft.drawRoundRect(232, by, 85, bh, 4, TFT_GREEN);
+  tft.fillRoundRect(200, by, 54, bh, 4, 0x4800);
+  tft.drawRoundRect(200, by, 54, bh, 4, TFT_RED);
+  tft.setTextColor(TFT_WHITE, 0x4800);
+  tft.drawString("DEL", 227, by + 16, 2);
+
+  tft.fillRoundRect(258, by, 59, bh, 4, TFT_DARKGREEN);
+  tft.drawRoundRect(258, by, 59, bh, 4, TFT_GREEN);
   tft.setTextColor(TFT_WHITE, TFT_DARKGREEN);
-  tft.drawString("OK", 274, by + 16, 2);
+  tft.drawString("OK", 287, by + 16, 2);
+}
+
+static void drawGraffitiPad(int grafShift) {
+  LakatosTftGuard tftLock;
+  tft.fillRect(0, 62, LAKATOS_SCREEN_W, LAKATOS_SCREEN_H - 62, 0x0841);
+
+  // Left Pane: LETTERS (a-z) (x: 34..154, w: 120, y: 64..201)
+  tft.fillRoundRect(34, 64, 120, 137, 5, TFT_BLACK);
+  tft.drawRoundRect(34, 64, 120, 137, 5, TFT_MAGENTA);
+
+  // Right Pane: DIGITS (0-9) & MATH (x: 166..286, w: 120, y: 64..201)
+  tft.fillRoundRect(166, 64, 120, 137, 5, TFT_BLACK);
+  tft.drawRoundRect(166, 64, 120, 137, 5, TFT_YELLOW);
+
+  tft.setTextDatum(TC_DATUM);
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  tft.drawString("LETTERS (a-z)", 94, 69, 1);
+  tft.drawString("SP:-> BS:<- SH:^", 94, 189, 1);
+
+  tft.drawString("DIGITS (0-9)", 226, 69, 1);
+  tft.drawString("+ - * / = ( ) .", 226, 189, 1);
+
+  // Bottom bar (y: 205..237): [abc/Abc/ABC] [SPACE] [DEL] [?] [OK]
+  int by = 205, bh = 32;
+  uint16_t shBg  = (grafShift == 2) ? TFT_YELLOW : ((grafShift == 1) ? 0x4208 : 0x2945);
+  uint16_t shFg  = (grafShift == 2) ? TFT_BLACK : TFT_YELLOW;
+  const char* shLbl = (grafShift == 2) ? "ABC" : ((grafShift == 1) ? "Abc" : "abc");
+  tft.fillRoundRect(2, by, 60, bh, 4, shBg);
+  tft.drawRoundRect(2, by, 60, bh, 4, TFT_YELLOW);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(shFg, shBg);
+  tft.drawString(shLbl, 32, by + 16, 2);
+
+  tft.fillRoundRect(66, by, 78, bh, 4, 0x18E3);
+  tft.drawRoundRect(66, by, 78, bh, 4, TFT_WHITE);
+  tft.setTextColor(TFT_WHITE, 0x18E3);
+  tft.drawString("SPACE", 105, by + 16, 2);
+
+  tft.fillRoundRect(148, by, 54, bh, 4, 0x4800);
+  tft.drawRoundRect(148, by, 54, bh, 4, TFT_RED);
+  tft.setTextColor(TFT_WHITE, 0x4800);
+  tft.drawString("DEL", 175, by + 16, 2);
+
+  tft.fillRoundRect(206, by, 44, bh, 4, 0x2945);
+  tft.drawRoundRect(206, by, 44, bh, 4, TFT_MAGENTA);
+  tft.setTextColor(TFT_MAGENTA, 0x2945);
+  tft.drawString("?", 228, by + 16, 2);
+
+  tft.fillRoundRect(254, by, 63, bh, 4, TFT_DARKGREEN);
+  tft.drawRoundRect(254, by, 63, bh, 4, TFT_GREEN);
+  tft.setTextColor(TFT_WHITE, TFT_DARKGREEN);
+  tft.drawString("OK", 285, by + 16, 2);
+}
+
+static void drawKeyboardModeMenu(bool isGraf) {
+  int sz    = lakatosGetCornerSize();
+  int menuY = (sz < 24) ? 24 : sz;
+  LakatosTftGuard tftLock;
+  tft.fillRoundRect(204, menuY, 114, 61, 5, 0x10A2);
+  tft.drawRoundRect(204, menuY, 114, 61, 5, TFT_CYAN);
+
+  tft.setTextDatum(MC_DATUM);
+  const char* const items[2] = {"Keyboard", "Graffiti"};
+  for (int i = 0; i < 2; i++) {
+    int iy   = menuY + 3 + i * 29;
+    bool sel = ((i == 1) == isGraf);
+    uint16_t bg     = sel ? 0x1A26 : 0x18E3;
+    uint16_t border = sel ? TFT_GREEN : TFT_CYAN;
+    tft.fillRoundRect(208, iy, 106, 25, 4, bg);
+    tft.drawRoundRect(208, iy, 106, 25, 4, border);
+    tft.setTextColor(sel ? TFT_YELLOW : TFT_WHITE, bg);
+    tft.drawString(items[i], 261, iy + 12, 2);
+  }
+  tft.setTextDatum(TL_DATUM);
+}
+
+static void drawKeyboardModalHeader(const char* title, bool allowCtrlC,
+                                    const String& text, int& cursor, int& viewStart) {
+  int sz = lakatosGetCornerSize();
+  LakatosTftGuard tftLock;
+  tft.fillScreen(0x0841);
+  tft.fillRect(0, 0, LAKATOS_SCREEN_W, 25, TFT_NAVY);
+
+  tft.fillRoundRect(26, 2, 56, 20, 4, 0x2945);
+  tft.drawRoundRect(26, 2, 56, 20, 4, TFT_CYAN);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_CYAN, 0x2945);
+  tft.drawString("CANCEL", 54, 12, 1);
+
+  if (allowCtrlC) {
+    tft.fillRoundRect(86, 2, 44, 20, 4, 0xA800);
+    tft.drawRoundRect(86, 2, 44, 20, 4, TFT_RED);
+    tft.setTextColor(TFT_WHITE, 0xA800);
+    tft.drawString("^C", 108, 12, 2);
+  }
+
+  tft.setTextColor(TFT_YELLOW, TFT_NAVY);
+  tft.drawString(title ? title : "INPUT", allowCtrlC ? 214 : 190, 12, 2);
+
+  // Standard NE corner downward-pointing Menu Wedge
+  tft.fillRect(LAKATOS_SCREEN_W - sz, 0, sz, sz, TFT_BLACK);
+  for (int y = 0; y * 2 < sz; y++) {
+    tft.drawFastHLine(LAKATOS_SCREEN_W - sz + y, y, sz - 2 * y, TFT_WHITE);
+  }
+
+  drawKbInputBox(text, cursor, viewStart);
 }
 
 int lakatosPromptKeyboard(const char* title, char* buf, size_t maxLen,
@@ -575,40 +725,32 @@ int lakatosPromptKeyboard(const char* title, char* buf, size_t maxLen,
     }
   } cornerGuard;
   String text = String(buf);
+  int cursor = (int)text.length();
+  int viewStart = 0;
   int page = 0;
+  int grafShift = 0;  // 0 = abc, 1 = Abc (one-shot), 2 = ABC (caps lock)
+  bool menuOpen = false;
 
-  {
-    LakatosTftGuard tftLock;
-    tft.fillScreen(0x0841);
-    tft.fillRect(0, 0, LAKATOS_SCREEN_W, 25, TFT_NAVY);
-
-    tft.fillRoundRect(2, 2, 56, 20, 4, 0x2945);
-    tft.drawRoundRect(2, 2, 56, 20, 4, TFT_CYAN);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(TFT_CYAN, 0x2945);
-    tft.drawString("CANCEL", 30, 12, 1);
-
-    if (allowCtrlC) {
-      tft.fillRoundRect(62, 2, 48, 20, 4, 0xA800);
-      tft.drawRoundRect(62, 2, 48, 20, 4, TFT_RED);
-      tft.setTextColor(TFT_WHITE, 0xA800);
-      tft.drawString("^C", 86, 12, 2);
+  auto insertCharAtCursor = [&](char ch) {
+    if (text.length() + 1 < maxLen) {
+      text = text.substring(0, cursor) + ch + text.substring(cursor);
+      cursor++;
+      drawKbInputBox(text, cursor, viewStart);
     }
+  };
 
-    tft.setTextColor(TFT_YELLOW, TFT_NAVY);
-    tft.drawString(title ? title : "INPUT", allowCtrlC ? 172 : 148, 12, 2);
+  auto deleteCharAtCursor = [&]() {
+    if (cursor > 0 && text.length() > 0) {
+      text = text.substring(0, cursor - 1) + text.substring(cursor);
+      cursor--;
+      drawKbInputBox(text, cursor, viewStart);
+    }
+  };
 
-    tft.fillRoundRect(236, 2, 81, 20, 4, TFT_DARKGREEN);
-    tft.drawRoundRect(236, 2, 81, 20, 4, TFT_GREEN);
-    tft.setTextColor(TFT_WHITE, TFT_DARKGREEN);
-    tft.drawString("SAVE/OK", 276, 12, 1);
-
-    tft.fillRoundRect(254, 28, 63, 30, 4, 0x4800);
-    tft.drawRoundRect(254, 28, 63, 30, 4, TFT_RED);
-    tft.setTextColor(TFT_WHITE, 0x4800);
-    tft.drawString("DEL", 285, 43, 2);
-
-    drawKbInputBox(text);
+  drawKeyboardModalHeader(title, allowCtrlC, text, cursor, viewStart);
+  if (gCal.kbGraf) {
+    drawGraffitiPad(grafShift);
+  } else {
     drawKbGrid(page);
   }
 
@@ -633,56 +775,289 @@ int lakatosPromptKeyboard(const char* title, char* buf, size_t maxLen,
 
     if (t.touched) {
       lastDownMs = now;
+
+      // In Graffiti mode, touches in the drawing area (y: 64..201) start stabilized
+      // continuous stroke capture with outlier/jump rejection and a 75ms pen-up window.
+      if (gCal.kbGraf && !menuOpen && !wasDown && t.y >= 64 && t.y < 202 && t.x >= 4 && t.x <= 316) {
+        // 1. Stabilize initial pen-down by requiring 2 consecutive samples within 18 px
+        int initCandX = constrain(t.x, 5, 315);
+        int initCandY = constrain(t.y, 65, 200);
+        int startX = initCandX, startY = initCandY;
+        bool stabilized = false;
+        uint32_t settleStartMs = now;
+        while ((uint32_t)(millis() - settleStartMs) <= 60u) {
+          delay(6);
+          LakatosTouchSample s0 = lakatosReadTouch();
+          if (s0.touched && s0.y >= 64 && s0.y < 202 && s0.x >= 4 && s0.x <= 316) {
+            int sx0 = constrain(s0.x, 5, 315);
+            int sy0 = constrain(s0.y, 65, 200);
+            if (abs(sx0 - initCandX) + abs(sy0 - initCandY) <= 18) {
+              startX = (initCandX + sx0) / 2;
+              startY = (initCandY + sy0) / 2;
+              stabilized = true;
+              break;
+            }
+            initCandX = sx0;
+            initCandY = sy0;
+          }
+        }
+        if (!stabilized) {
+          continue;
+        }
+
+        uint8_t pane = (startX < 160) ? LAKATOS_PANE_LETTERS : LAKATOS_PANE_DIGITS;
+        uint16_t inkCol = (pane == LAKATOS_PANE_LETTERS) ? TFT_CYAN : TFT_YELLOW;
+        LakatosGraffitiPt pts[128];
+        pts[0] = {(int16_t)startX, (int16_t)startY};
+        int ptCount = 1;
+        int lastX = startX, lastY = startY;
+        bool hasCand = false;
+        int candX = startX, candY = startY;
+        uint32_t lastContactMs = millis();
+
+        {
+          LakatosTftGuard tftLock;
+          tft.fillCircle(lastX, lastY, 2, TFT_GREEN);
+        }
+
+        while (true) {
+          if (lakatosShouldExitApp()) return -1;
+          updateLakatosConfigBackground();
+          LakatosTouchSample s = lakatosReadTouch();
+          uint32_t sNow = millis();
+          if (s.touched) {
+            lastContactMs = sNow;
+            int sx = constrain(s.x, 5, 315);
+            int sy = constrain(s.y, 65, 200);
+            int dLast = abs(sx - lastX) + abs(sy - lastY);
+
+            if (hasCand) {
+              int dCand     = abs(sx - candX) + abs(sy - candY);
+              int dCandLast = abs(candX - lastX) + abs(candY - lastY);
+              if (dCand <= 24 && dCandLast <= 36) {
+                // Sample (sx, sy) confirms (candX, candY) is on a smooth path
+                int commitX = (lastX + candX * 3) / 4;
+                int commitY = (lastY + candY * 3) / 4;
+                int dx = commitX - lastX;
+                int dy = commitY - lastY;
+                if (dx * dx + dy * dy >= 4) {
+                  {
+                    LakatosTftGuard tftLock;
+                    tft.drawLine(lastX, lastY, commitX, commitY, inkCol);
+                  }
+                  if (ptCount < 128) {
+                    pts[ptCount++] = {(int16_t)commitX, (int16_t)commitY};
+                  }
+                  lastX = commitX;
+                  lastY = commitY;
+                }
+                candX = sx;
+                candY = sy;
+              } else if (dLast <= 28) {
+                // (candX, candY) was a 1-sample wild jump; (sx, sy) returned near (lastX, lastY)
+                candX = sx;
+                candY = sy;
+              } else {
+                // Wild jump: discard unconfirmed candidate
+                hasCand = false;
+              }
+            } else {
+              if (dLast <= 36) {
+                hasCand = true;
+                candX   = sx;
+                candY   = sy;
+              }
+            }
+          } else if (digitalRead(XPT2046_IRQ) == LOW) {
+            lastContactMs = sNow;
+          } else if ((uint32_t)(sNow - lastContactMs) >= 75u) {
+            break;
+          }
+          delay(8);
+        }
+
+        // Only commit final lookahead point if it didn't jump at pen lift-off
+        if (hasCand && (abs(candX - lastX) + abs(candY - lastY)) <= 10 && ptCount < 128) {
+          int dx = candX - lastX;
+          int dy = candY - lastY;
+          if (dx * dx + dy * dy >= 4) {
+            pts[ptCount++] = {(int16_t)candX, (int16_t)candY};
+          }
+        }
+
+        LakatosGraffitiResult gr = lakatosRecognizeGraffitiStroke(pts, ptCount, pane);
+        if (gr.ch == LAKATOS_GRAFFITI_BACKSPACE) {
+          deleteCharAtCursor();
+        } else if (gr.ch == LAKATOS_GRAFFITI_SHIFT) {
+          grafShift = (grafShift + 1) % 3;
+        } else if (gr.ch >= 32 && gr.ch <= 126) {
+          char outCh = gr.ch;
+          if (outCh >= 'a' && outCh <= 'z' && grafShift > 0) {
+            outCh = (char)(outCh - 32);
+            if (grafShift == 1) grafShift = 0;
+          }
+          insertCharAtCursor(outCh);
+        }
+
+        drawGraffitiPad(grafShift);
+        wasDown = false;
+        lastRel = millis();
+        lastPressMs = lastRel;
+        continue;
+      }
+
       if (!wasDown && (uint32_t)(now - lastRel) >= 95u &&
           (lastPressMs == 0 || (uint32_t)(now - lastPressMs) >= 180u)) {
         wasDown = true;
         lastPressMs = now;
-        if (t.y <= 34 && t.x <= 60) {
+        if (menuOpen) {
+          int sz    = lakatosGetCornerSize();
+          int menuY = (sz < 24) ? 24 : sz;
+          menuOpen = false;
+          if (t.x >= 204 && t.x <= 318 && t.y >= menuY + 2 && t.y < menuY + 60) {
+            int itemIdx = (t.y - (menuY + 3)) / 29;
+            bool nextGraf = (itemIdx == 1);
+            if (nextGraf != gCal.kbGraf) {
+              gCal.kbGraf = nextGraf;
+              saveConfigToNvs();
+            }
+          }
+          drawKbInputBox(text, cursor, viewStart);
+          if (gCal.kbGraf) {
+            drawGraffitiPad(grafShift);
+          } else {
+            drawKbGrid(page);
+          }
+          continue;
+        }
+        {
+          int sz    = lakatosGetCornerSize();
+          int hitSz = (sz < 24) ? 24 : sz;
+          if (t.y <= hitSz && t.x >= LAKATOS_SCREEN_W - hitSz) {
+            menuOpen = true;
+            drawKeyboardModeMenu(gCal.kbGraf);
+            continue;
+          }
+        }
+        if (t.y <= 26 && t.x >= 24 && t.x <= 84) {
           lakatosWaitTouchRelease();
           return 0;  // Cancelled
         }
-        if (allowCtrlC && t.y <= 34 && t.x >= 62 && t.x <= 112) {
+        if (allowCtrlC && t.y <= 26 && t.x >= 85 && t.x <= 132) {
           lakatosWaitTouchRelease();
           return -1;  // ^C
         }
-        if (t.y <= 25 && t.x >= 232) {
-          strncpy(buf, text.c_str(), maxLen - 1);
-          buf[maxLen - 1] = '\0';
-          lakatosWaitTouchRelease();
-          return 1;
-        }
-        if (t.y >= 26 && t.y <= 60) {
-          if (t.x >= 250 && text.length() > 0) {
-            text.remove(text.length() - 1);
-            drawKbInputBox(text);
+        if (t.y >= 27 && t.y <= 60) {
+          // Tap in edit line box: left/right wedges scroll by 20 chars; otherwise
+          // hold-and-glide moves the cyan cursor wedge to the closest inter-character gap.
+          int len = (int)text.length();
+          int viewEnd = viewStart;
+          {
+            LakatosTftGuard tftLock;
+            while (viewEnd < len &&
+                   tft.textWidth(text.substring(viewStart, viewEnd + 1), 2) <= 278) {
+              viewEnd++;
+            }
           }
-        } else if (t.y >= 64 && t.y < 204) {
+          if (viewStart > 0 && t.x < 22) {
+            cursor -= 20;
+            if (cursor < 0) cursor = 0;
+            drawKbInputBox(text, cursor, viewStart);
+          } else if (viewEnd < len && t.x > 298) {
+            cursor += 20;
+            if (cursor > len) cursor = len;
+            drawKbInputBox(text, cursor, viewStart);
+          } else {
+            auto snapCursorToX = [&](int px) {
+              int bestIdx  = viewStart;
+              int bestDist = 9999;
+              {
+                LakatosTftGuard tftLock;
+                for (int i = viewStart; i <= viewEnd; i++) {
+                  int gx = 20 + tft.textWidth(text.substring(viewStart, i), 2);
+                  int d  = abs(px - gx);
+                  if (d < bestDist) {
+                    bestDist = d;
+                    bestIdx  = i;
+                  }
+                }
+              }
+              if (bestIdx != cursor) {
+                cursor = bestIdx;
+                drawKbInputBox(text, cursor, viewStart, &viewEnd);
+              }
+            };
+            snapCursorToX(t.x);
+            int lastDragX = t.x;
+            uint32_t lastContactMs = now;
+            while (true) {
+              if (lakatosShouldExitApp()) return -1;
+              updateLakatosConfigBackground();
+              LakatosTouchSample s = lakatosReadTouch();
+              uint32_t sNow = millis();
+              if (s.touched) {
+                lastContactMs = sNow;
+                if (s.y >= 18 && s.y <= 76 && abs(s.x - lastDragX) <= 44) {
+                  lastDragX = s.x;
+                  snapCursorToX(s.x);
+                }
+              } else if (digitalRead(XPT2046_IRQ) == LOW) {
+                lastContactMs = sNow;
+              } else if ((uint32_t)(sNow - lastContactMs) >= 60u) {
+                break;
+              }
+              delay(10);
+            }
+            wasDown = false;
+            lastRel = millis();
+            lastPressMs = lastRel;
+          }
+        } else if (!gCal.kbGraf && t.y >= 64 && t.y < 204) {
           int r = (t.y - 64) / 35;
           int c = t.x / 32;
           if (r >= 0 && r < 4 && c >= 0 && c < 10) {
-            if (text.length() + 1 < maxLen) {
-              char ch = KB_ROWS[page][r][c];
-              text += ch;
-              drawKbInputBox(text);
-            }
+            insertCharAtCursor(KB_ROWS[page][r][c]);
           }
         } else if (t.y >= 205) {
-          if (t.x < 70) {
-            page = (page == 1) ? 0 : 1;
-            drawKbGrid(page);
-          } else if (t.x < 136) {
-            page = (page == 2) ? 0 : 2;
-            drawKbGrid(page);
-          } else if (t.x < 230) {
-            if (text.length() + 1 < maxLen) {
-              text += ' ';
-              drawKbInputBox(text);
+          if (!gCal.kbGraf) {
+            // QWERTY bottom bar: [ABC] (2..56) [#+=] (60..114) [SPACE] (118..196) [DEL] (200..254) [OK] (258..317)
+            if (t.x < 58) {
+              page = (page == 1) ? 0 : 1;
+              drawKbGrid(page);
+            } else if (t.x < 116) {
+              page = (page == 2) ? 0 : 2;
+              drawKbGrid(page);
+            } else if (t.x < 198) {
+              insertCharAtCursor(' ');
+            } else if (t.x < 256) {
+              deleteCharAtCursor();
+            } else {
+              strncpy(buf, text.c_str(), maxLen - 1);
+              buf[maxLen - 1] = '\0';
+              lakatosWaitTouchRelease();
+              return 1;
             }
           } else {
-            strncpy(buf, text.c_str(), maxLen - 1);
-            buf[maxLen - 1] = '\0';
-            lakatosWaitTouchRelease();
-            return 1;
+            // Graffiti bottom bar: [Shift] (2..62) [SPACE] (66..144) [DEL] (148..202) [?] (206..250) [OK] (254..317)
+            if (t.x < 64) {
+              grafShift = (grafShift + 1) % 3;
+              drawGraffitiPad(grafShift);
+            } else if (t.x < 146) {
+              insertCharAtCursor(' ');
+            } else if (t.x < 204) {
+              deleteCharAtCursor();
+            } else if (t.x < 252) {
+              lakatosRunGraffitiHelpModal();
+              drawKeyboardModalHeader(title, allowCtrlC, text, cursor, viewStart);
+              drawGraffitiPad(grafShift);
+              wasDown = false;
+              lastRel = millis();
+            } else {
+              strncpy(buf, text.c_str(), maxLen - 1);
+              buf[maxLen - 1] = '\0';
+              lakatosWaitTouchRelease();
+              return 1;
+            }
           }
         }
       }

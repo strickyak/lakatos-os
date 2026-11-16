@@ -1,0 +1,78 @@
+package main
+
+// clear9: Rectangular spiral inward from outer perimeter to center (1 second).
+
+const TOTAL = 192
+
+var spX [TOTAL]int
+var spY [TOTAL]int
+
+func buildSpiral() {
+	left := 0
+	right := 15
+	top := 0
+	bottom := 11
+	idx := 0
+
+	for left <= right && top <= bottom {
+		for x := left; x <= right; x = x + 1 {
+			spX[idx] = x
+			spY[idx] = top
+			idx = idx + 1
+		}
+		top = top + 1
+
+		for y := top; y <= bottom; y = y + 1 {
+			spX[idx] = right
+			spY[idx] = y
+			idx = idx + 1
+		}
+		right = right - 1
+
+		if top <= bottom {
+			for x := right; x >= left; x = x - 1 {
+				spX[idx] = x
+				spY[idx] = bottom
+				idx = idx + 1
+			}
+			bottom = bottom - 1
+		}
+
+		if left <= right {
+			for y := bottom; y >= top; y = y - 1 {
+				spX[idx] = left
+				spY[idx] = y
+				idx = idx + 1
+			}
+			left = left + 1
+		}
+	}
+}
+
+func checkCancel() bool {
+	if os_serial_available() > 0 {
+		ch := os_serial_read()
+		if ch == 'q' || ch == 'Q' || ch == 3 {
+			return true
+		}
+	}
+	clicked, _, _ := os_read_click()
+	return clicked != 0
+}
+
+func main() {
+	buildSpiral()
+	idx := 0
+	for step := 0; step < 48; step = step + 1 {
+		if checkCancel() {
+			os_exit(0)
+		}
+		for k := 0; k < 4; k = k + 1 {
+			os_tft_fill_rect(spX[idx]*20, spY[idx]*20, 20, 20, 0x0000)
+			idx = idx + 1
+		}
+		os_delay_ms(21)
+	}
+	os_tft_fill_screen(0x0000)
+	os_exit(0)
+}

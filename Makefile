@@ -77,6 +77,18 @@ apps: lakat
 	$(LAKAT) compile -req $(REQ) -title "Life 4x4" -o build/subapps/life44.sapp subapps/life44/life44.lgolf
 	$(LAKAT) compile -req $(REQ) -title "Ants" -o build/subapps/ants.sapp subapps/ants/ants.lgolf
 	$(LAKAT) compile -req $(REQ) -title "Color Slice" -o build/subapps/color-slice.sapp subapps/color-slice/color-slice.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Clear 1" -o build/subapps/clear1.sapp subapps/clear1/clear1.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Clear 2" -o build/subapps/clear2.sapp subapps/clear2/clear2.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Clear 3" -o build/subapps/clear3.sapp subapps/clear3/clear3.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Clear 4" -o build/subapps/clear4.sapp subapps/clear4/clear4.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Clear 5" -o build/subapps/clear5.sapp subapps/clear5/clear5.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Clear 6" -o build/subapps/clear6.sapp subapps/clear6/clear6.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Clear 7" -o build/subapps/clear7.sapp subapps/clear7/clear7.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Clear 8" -o build/subapps/clear8.sapp subapps/clear8/clear8.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Clear 9" -o build/subapps/clear9.sapp subapps/clear9/clear9.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Clear 10" -o build/subapps/clear10.sapp subapps/clear10/clear10.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Clear 11" -o build/subapps/clear11.sapp subapps/clear11/clear11.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Clear 12" -o build/subapps/clear12.sapp subapps/clear12/clear12.lgolf
 	$(PYTHON) tools/build_lapp.py --req $(REQ)
 
 lakatos: apps
