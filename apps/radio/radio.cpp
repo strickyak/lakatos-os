@@ -53,18 +53,25 @@ static const RadioPreset kPresets[] = {
     nullptr
   },
   {
+    "KFJC",
+    "KFJC 89.7 FM",
+    "Foothill College - Los Altos Hills, CA",
+    "http://netcast.kfjc.org/kfjc-32k-mp3",
+    nullptr
+  },
+  {
+    "KZSU",
+    "KZSU 90.1 FM",
+    "Stanford University - Stanford, CA",
+    "http://kzsu-streams.stanford.edu/kzsu-1-128.mp3",
+    nullptr
+  },
+  {
     "WDAV",
     "WDAV 89.9 FM",
     "Davidson College - Davidson, NC",
     "http://audio-mp3.ibiblio.org:8000/wdav-24k",
     "http://audio-mp3.ibiblio.org:8000/wdav-56k"
-  },
-  {
-    "WNCW",
-    "WNCW 88.7 FM",
-    "Isothermal CC - Spindale, NC",
-    "http://audio-mp3.ibiblio.org:8000/wncw-24k",
-    "https://audio-mp3.ibiblio.org/wncw-24k"
   },
   {
     "WFMU",
@@ -88,7 +95,7 @@ static const RadioPreset kPresets[] = {
     nullptr
   },
 };
-static constexpr int kNumPresets = 7;
+static constexpr int kNumPresets = 8;
 
 // ---------------------------------------------------------------------------
 // Audio & Network Ring Buffers
@@ -138,7 +145,7 @@ static StreamState gState             = ST_DISCONNECTED;
 static int         gPresetIdx         = 0; // 0..6 = preset, 7 = custom URL
 static char        gCustomUrl[128]    = "http://streaming.wrek.org:8000/main/24kb.mp3";
 static char        gStationTitle[48]  = "Georgia Tech - Atlanta, GA";
-static uint8_t     gMasterVolStep     = 8;  // 0..11 (0=silence, 8=100%, 9..11=overmodulated)
+static uint8_t     gMasterVolStep     = 3;  // 0..11 (0=silence, 8=100%, 9..11=overmodulated)
 static uint32_t    gBytesReceived     = 0;
 static uint32_t    gFramesDecoded     = 0;
 static uint32_t    gLastReconnectMs   = 0;
@@ -840,15 +847,15 @@ static bool handleVolumeTouch(int tx, int ty) {
 }
 
 static void drawBottomButtons() {
-  // 8 buttons arranged in 2 rows of 4 buttons (y = 181..236)
-  const int btnW = 74;
+  // Up to 10 buttons arranged in 2 rows of 5 buttons (y = 181..236)
+  const int btnW = 58;
   const int btnH = 26;
   const int gapX = 4;
 
   gOs->tft_set_text_datum(LAKATOS_MC_DATUM);
-  for (int i = 0; i < 8; i++) {
-    int row = i / 4;
-    int col = i % 4;
+  for (int i = 0; i <= kNumPresets && i < 10; i++) {
+    int row = i / 5;
+    int col = i % 5;
     int bx  = 6 + col * (btnW + gapX);
     int by  = (row == 0) ? 181 : 210;
 
@@ -881,6 +888,7 @@ static void drawFullUi() {
 // ---------------------------------------------------------------------------
 void app_main(const LakatosApi* os) {
   gOs = os;
+  gMasterVolStep = 3;
   os->set_rgb_led(true, false, false, 0);
 
   gNetFifo = (uint8_t*)os->malloc(kNetFifoSize);
@@ -944,13 +952,13 @@ void app_main(const LakatosApi* os) {
         if (lakatos_is_exit_wedge(os, ts.x, ts.y)) {
           break;
         }
-        // Bottom 2x4 button grid (y = 181..238)
+        // Bottom 2x5 button grid (y = 181..238)
         if (ts.y >= 180) {
           int row = (ts.y >= 209) ? 1 : 0;
-          int col = (ts.x - 6) / 78;
+          int col = (ts.x - 6) / 62;
           if (col < 0) col = 0;
-          if (col > 3) col = 3;
-          int idx = row * 4 + col;
+          if (col > 4) col = 4;
+          int idx = row * 5 + col;
           if (idx < kNumPresets) {
             gPresetIdx = idx;
             drawHeaderBar();
@@ -959,8 +967,8 @@ void app_main(const LakatosApi* os) {
             connectToPreset(idx);
             drawStatusBadge();
             drawInfoPanel();
-          } else {
-            // 8th button: Custom URL keyboard prompt
+          } else if (idx == kNumPresets) {
+            // Custom URL keyboard prompt
             closeCurrentStream();
             int r = os->prompt_keyboard("STREAM URL (HTTP MP3):", gCustomUrl, sizeof(gCustomUrl), false);
             os->set_rgb_led(true, false, false, 0);
