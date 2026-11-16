@@ -1340,7 +1340,7 @@ static void drawTopHeader() {
   if (gState.songLoaded) {
     char line1[64];
     if (gState.currentSongBucket != 0) {
-      snprintf(line1, sizeof(line1), "[%c]%s", gState.currentSongBucket, gState.currentFileName);
+      snprintf(line1, sizeof(line1), "[%c] %s", gState.currentSongBucket, gState.currentFileName);
     } else {
       snprintf(line1, sizeof(line1), "%s", gState.currentFileName);
     }
