@@ -1988,6 +1988,7 @@ static bool performKernelOtaUpgrade(String* outErr) {
   uint32_t done = 0;
   int lastPct = -1;
   if (!useSd) {
+    lakatosInvalidateAppSlotCache();
     memset(slotSector, 0xFF, 4096);
     memcpy(slotSector, &hdr, sizeof(hdr));
   }

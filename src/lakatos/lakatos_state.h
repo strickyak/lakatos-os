@@ -211,6 +211,7 @@ extern uint8_t* gLakatosPngScratch;
 extern size_t   gLakatosPngScratchSize;
 bool lakatosIsNativeAppRunning();
 bool initLakatosLoader();
+void lakatosInvalidateAppSlotCache();
 // Stages and executes a .lapp binary from /flash/..., /sd/..., or /net/...
 // Returns to caller when the app calls os->exit(code) or returns from app_main.
 bool lakatosRunAppFromFile(const char* vfsPath, int* outExitCode = nullptr,

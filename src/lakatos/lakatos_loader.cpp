@@ -1255,6 +1255,68 @@ static int api_run_subapp(const char* name_or_path, const char* arg) {
   return ok ? subExitCode : -1;
 }
 
+static bool    gAppSlotVerified     = false;
+static uint8_t gVerifiedSlotSha[32] = {0};
+
+void lakatosInvalidateAppSlotCache() {
+  gAppSlotVerified = false;
+  memset(gVerifiedSlotSha, 0, sizeof(gVerifiedSlotSha));
+}
+
+// Reads back the payload in gAppSlotPart [128 .. slotHdr.total_file_size) and
+// verifies its SHA-256 against slotHdr.sha256 so an interrupted/partial flash
+// (including one left behind before commit-last headers) is caught & healed.
+static bool verifyAppSlotPayloadSha256(const LakatosAppHeader& slotHdr) {
+  if (!gAppSlotPart) return false;
+  if (slotHdr.magic != LAKATOS_APP_MAGIC ||
+      slotHdr.abi_version != LAKATOS_API_VERSION ||
+      slotHdr.total_file_size <= sizeof(LakatosAppHeader) ||
+      slotHdr.total_file_size > gAppSlotPart->size) {
+    return false;
+  }
+
+  constexpr uint32_t kVerifyChunk = 4096u;
+  uint8_t* buf = (uint8_t*)malloc(kVerifyChunk);
+  if (!buf) return false;
+
+  mbedtls_sha256_context shaCtx;
+  mbedtls_sha256_init(&shaCtx);
+  mbedtls_sha256_starts(&shaCtx, 0);
+
+  uint32_t off = sizeof(LakatosAppHeader);
+  bool readOk = true;
+  while (off < slotHdr.total_file_size) {
+    uint32_t n = slotHdr.total_file_size - off;
+    if (n > kVerifyChunk) n = kVerifyChunk;
+    if (esp_partition_read(gAppSlotPart, off, buf, n) != ESP_OK) {
+      readOk = false;
+      break;
+    }
+    mbedtls_sha256_update(&shaCtx, buf, n);
+    off += n;
+  }
+
+  uint8_t calcSha[32];
+  mbedtls_sha256_finish(&shaCtx, calcSha);
+  mbedtls_sha256_free(&shaCtx);
+  free(buf);
+
+  return readOk && (memcmp(calcSha, slotHdr.sha256, 32) == 0);
+}
+
+static bool isAppSlotValidAndVerified(const LakatosAppHeader& slotHdr) {
+  if (gAppSlotVerified && memcmp(slotHdr.sha256, gVerifiedSlotSha, 32) == 0) {
+    return true;
+  }
+  if (verifyAppSlotPayloadSha256(slotHdr)) {
+    gAppSlotVerified = true;
+    memcpy(gVerifiedSlotSha, slotHdr.sha256, 32);
+    return true;
+  }
+  lakatosInvalidateAppSlotCache();
+  return false;
+}
+
 bool lakatosRunAppFromFile(const char* vfsPath, int* outExitCode, String* outErrMsg) {
   if (!gAppSlotPart) {
     if (outErrMsg) *outErrMsg = "app_slot partition missing";
@@ -1363,11 +1425,17 @@ bool lakatosRunAppFromFile(const char* vfsPath, int* outExitCode, String* outErr
       memset(&slotCheck, 0, sizeof(slotCheck));
       if (esp_partition_read(gAppSlotPart, 0, &slotCheck, sizeof(slotCheck)) == ESP_OK &&
           slotCheck.magic == LAKATOS_APP_MAGIC &&
-          strcmp(slotCheck.name, gLakatosJoinNativeTarget) == 0) {
+          strcmp(slotCheck.name, gLakatosJoinNativeTarget) == 0 &&
+          isAppSlotValidAndVerified(slotCheck)) {
         hdr = slotCheck;
         resolvedBinPath[0] = '\0';
         vfsPath = gLakatosJoinNativeTarget;
       } else {
+        if (slotCheck.magic == LAKATOS_APP_MAGIC) {
+          Serial.printf("[Lakatos] Corrupt/incomplete cached '%s' in app_slot -> wiping header\r\n",
+                        slotCheck.name);
+          esp_partition_erase_range(gAppSlotPart, 0, 4096);
+        }
         lakatosEndAppSession();
         if (outErrMsg) {
           *outErrMsg = String("Missing ") + gLakatosJoinNativeTarget;
@@ -1394,18 +1462,28 @@ bool lakatosRunAppFromFile(const char* vfsPath, int* outExitCode, String* outErr
     return false;
   }
 
-  // 2. Compare against header currently staged in app_slot
+  // 2. Compare against header currently staged in app_slot (and verify payload SHA-256)
   LakatosAppHeader slotHdr;
   memset(&slotHdr, 0, sizeof(slotHdr));
   bool alreadyStaged = false;
   if (esp_partition_read(gAppSlotPart, 0, &slotHdr, sizeof(slotHdr)) == ESP_OK) {
     if (memcmp(&hdr, &slotHdr, sizeof(LakatosAppHeader)) == 0) {
-      alreadyStaged = true;
+      if (isAppSlotValidAndVerified(slotHdr)) {
+        alreadyStaged = true;
+      } else {
+        Serial.printf("[Lakatos] Incomplete/corrupt app_slot image for '%s' (SHA-256 mismatch) -> re-staging!\r\n",
+                      hdr.name);
+        esp_partition_erase_range(gAppSlotPart, 0, 4096);
+      }
     }
   }
 
-  // 3. Stage into app_slot flash if needed, verifying SHA-256 on the fly
+  // 3. Stage into app_slot flash if needed:
+  //    Hold back the 128-byte LakatosAppHeader (leave bytes 0..127 as 0xFF) while
+  //    writing payload chunks, verify read-back SHA-256 in flash, and commit
+  //    hdr (with hdr.magic last) only after the entire image is verified on flash.
   if (!alreadyStaged) {
+    lakatosInvalidateAppSlotCache();
     uint32_t eraseBytes = (hdr.total_file_size + 4095u) & ~4095u;
     drawLoaderStatusBox("STAGING TO FLASH SLOT", hdr.name, 15);
     if (esp_partition_erase_range(gAppSlotPart, 0, eraseBytes) != ESP_OK) {
@@ -1435,16 +1513,22 @@ bool lakatosRunAppFromFile(const char* vfsPath, int* outExitCode, String* outErr
         if (outErrMsg) *outErrMsg = "Short read while staging .lapp";
         break;
       }
-      if (esp_partition_write(gAppSlotPart, offset, chunkBuf, got) != ESP_OK) {
-        stageOk = false;
-        if (outErrMsg) *outErrMsg = "Flash write to app_slot failed";
-        break;
-      }
       if (offset + (uint32_t)got > sizeof(LakatosAppHeader)) {
         uint32_t shaStart = (offset < sizeof(LakatosAppHeader))
                                 ? (sizeof(LakatosAppHeader) - offset)
                                 : 0;
         mbedtls_sha256_update(&shaCtx, chunkBuf + shaStart, (uint32_t)got - shaStart);
+      }
+      if (offset < sizeof(LakatosAppHeader)) {
+        uint32_t hdrPart = sizeof(LakatosAppHeader) - offset;
+        if (hdrPart > (uint32_t)got) hdrPart = (uint32_t)got;
+        // Leave header bytes 0..127 unprogrammed (0xFF in NOR flash) until commit!
+        memset(chunkBuf, 0xFF, hdrPart);
+      }
+      if (esp_partition_write(gAppSlotPart, offset, chunkBuf, got) != ESP_OK) {
+        stageOk = false;
+        if (outErrMsg) *outErrMsg = "Flash write to app_slot failed";
+        break;
       }
       offset += (uint32_t)got;
       int pct = 20 + (int)((offset * 70ULL) / hdr.total_file_size);
@@ -1458,12 +1542,23 @@ bool lakatosRunAppFromFile(const char* vfsPath, int* outExitCode, String* outErr
 
     if (!stageOk) return false;
 
-    if (memcmp(calcSha, hdr.sha256, 32) != 0) {
-      // Wipe header in app_slot so corrupt image isn't cached
+    if (memcmp(calcSha, hdr.sha256, 32) != 0 || !verifyAppSlotPayloadSha256(hdr)) {
       esp_partition_erase_range(gAppSlotPart, 0, 4096);
       if (outErrMsg) *outErrMsg = "SHA-256 verification failed";
       return false;
     }
+
+    // Commit header bytes 4..127 first, then 4-byte magic word at offset 0 last!
+    const uint8_t* hdrBytes = (const uint8_t*)&hdr;
+    if (esp_partition_write(gAppSlotPart, 4, hdrBytes + 4, sizeof(LakatosAppHeader) - 4) != ESP_OK ||
+        esp_partition_write(gAppSlotPart, 0, &hdr.magic, sizeof(hdr.magic)) != ESP_OK) {
+      esp_partition_erase_range(gAppSlotPart, 0, 4096);
+      if (outErrMsg) *outErrMsg = "Header commit to app_slot failed";
+      return false;
+    }
+
+    gAppSlotVerified = true;
+    memcpy(gVerifiedSlotSha, hdr.sha256, 32);
   }
 
   drawLoaderStatusBox("MAPPING MMU & STARTING", hdr.name, 95);
