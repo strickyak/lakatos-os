@@ -1,6 +1,23 @@
-# Yak-CYD Firmware Suite (`yak-cyd`)
+# Lakatos OS for ESP32 Cheap Yellow Displays
 
-Firmware, **Lakatos OS / LCode** 32-bit bytecode runtime, **LGolf** compiler toolchain, and multi-head native app suite for the **ESP32-2432S028R** ("Cheap Yellow Display" / **ELEGOO 2.8" ESP32 Display**).
+This is a project to make toys for friends and family.
+*  When ambient, it's a picture gallery.
+*  But if you pick it up, it has games and demos and even programming languages to play with.
+*  And if you plug it into your computer and tell Gemini what it is, Gemini can write more apps or even whole new firmware for you.
+
+We are standardizing on this ELEGOO version of the Cheap Yellow Display:
+
+ELEGOO 2-Pack ESP32 2.8-Inch Touch Displays, 240x320 ILI9341, USB-C WiFi
+[ https://www.amazon.com/dp/B0FJQ6RK39 ]
+Currently that's 2 devices for $28.
+
+Also you'll need a USB-C cable and a power source (draws under 1 Watt).
+
+Optional, but highly recommended, a tiny 8-ohm or 4-ohm speaker
+[ such as https://www.amazon.com/dp/B0GTTWH8PC or https://www.amazon.com/dp/B0F3X3G31L ]
+with Micro JST 1.25 mm 2-Pin interface.
+
+Optional, if you are going to write more apps, a Micro SD card, 32GB or less (16GB is a good price point).
 
 ## Quick Start (`Makefile` Targets)
 
@@ -14,6 +31,9 @@ make monitor        # Open 115200-baud serial monitor
 ```
 
 ---
+
+AI summary of the contents of this repo:
+Firmware, **Lakatos OS / LCode** 32-bit bytecode runtime, **LGolf** compiler toolchain, and multi-head native app suite for the **ESP32-2432S028R** ("Cheap Yellow Display" / **ELEGOO 2.8" ESP32 Display**).
 
 ## 1. `lakatos` (`src/lakatos/`, `cmd/lakat/`, `pkg/lakat/`) — Lakatos OS & LCode Runtime
 
