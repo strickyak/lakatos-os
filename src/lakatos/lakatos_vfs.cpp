@@ -1,6 +1,4 @@
 #include "lakatos_state.h"
-#include "seed_apps.h"
-#include "seed_gallery.h"
 
 #include <HTTPClient.h>
 #include <LittleFS.h>
@@ -195,29 +193,6 @@ void lakatosGetStorageInfo(LakatosStorageInfo* outInfo, bool forceProbeSd) {
 
 static bool ensurePrefetchWorkerStarted();
 
-static void seedLoAppFile(const char* loSubPath, const uint8_t* data, size_t len) {
-  bool needSeed = true;
-  if (LittleFS.exists(loSubPath)) {
-    File f = LittleFS.open(loSubPath, "r");
-    if (f && f.size() == len) {
-      uint8_t hdrA[128];
-      if (f.read(hdrA, 128) == 128 && memcmp(hdrA, data, 128) == 0) {
-        needSeed = false;
-      }
-    }
-    if (f) f.close();
-  }
-  if (needSeed) {
-    File f = LittleFS.open(loSubPath, "w");
-    if (f) {
-      f.write(data, len);
-      f.close();
-      Serial.printf("[Lakatos VFS] Seeded /flash%s (%u bytes)\n",
-                    loSubPath, (unsigned)len);
-    }
-  }
-}
-
 void initLakatosVfs() {
   if (LittleFS.begin(true, "/flash", 8, "spiffs")) {
     gLoMounted = true;
@@ -225,8 +200,6 @@ void initLakatosVfs() {
     if (!LittleFS.exists("/apps")) {
       LittleFS.mkdir("/apps");
     }
-    seedLoAppFile("/apps/life.lapp", kSeedApp_life, sizeof(kSeedApp_life));
-    seedLoAppFile("/apps/gallery.lapp", kSeedApp_gallery, sizeof(kSeedApp_gallery));
   } else {
     Serial.println("[Lakatos VFS] ERROR: Failed to mount /flash LittleFS!");
   }

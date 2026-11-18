@@ -267,9 +267,9 @@ void initLakatosConfig() {
 
   if (savedSer.length() == 0 || savedSer == "ing") {
     bootloader_random_enable();
-    uint32_t rnd = (esp_random() % 99999999u) + 1u;
+    uint32_t rnd = 10000000u + (esp_random() % 90000000u);
     bootloader_random_disable();
-    snprintf(gSerialNo, sizeof(gSerialNo), "%08u", (unsigned)rnd);
+    snprintf(gSerialNo, sizeof(gSerialNo), "%u", (unsigned)rnd);
     saveConfigToNvs();
   } else {
     strncpy(gSerialNo, savedSer.c_str(), sizeof(gSerialNo) - 1);

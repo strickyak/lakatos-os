@@ -53,8 +53,8 @@ lakat:
 
 apps: lakat
 	mkdir -p build/apps build/subapps
-	$(LAKAT) compile -req $(REQ) -title "Conway's Life" -seed-var kSeedApp_life -seed-header src/lakatos/seed_apps.h -o build/apps/life.lapp apps/life/life.lgolf
-	$(LAKAT) compile -req $(REQ) -title "Gallery Viewer" -seed-var kSeedApp_gallery -seed-header src/lakatos/seed_gallery.h -o build/apps/gallery.lapp apps/gallery/gallery.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Conway's Life" -o build/apps/life.lapp apps/life/life.lgolf
+	$(LAKAT) compile -req $(REQ) -title "Gallery Viewer" -o build/apps/gallery.lapp apps/gallery/gallery.lgolf
 	$(LAKAT) compile -req $(REQ) -title "Breakout" -o build/apps/breakout.lapp apps/breakout/breakout.lgolf
 	$(LAKAT) compile -req $(REQ) -title "Space Invaders" -o build/apps/invaders.lapp apps/invaders/invaders.lgolf
 	$(LAKAT) compile -req $(REQ) -title "Mandelbrot" -o build/apps/mandelbrot.lapp apps/mandelbrot/mandelbrot.lgolf
@@ -118,18 +118,14 @@ build-lakatos: apps
 
 web-installer: build-lakatos
 	rm -rf build/web-installer
-	mkdir -p build/web-installer build/web-installer/apps build/web-installer/subapps build/web-installer/fs_root/apps build/web-installer/fs_root/subapps
-	cp web-installer/index.html web-installer/manifest.json web-installer/manifest-os-only.json build/web-installer/
+	mkdir -p build/web-installer build/web-installer/fs_root/apps
+	cp web-installer/index.html web-installer/manifest.json build/web-installer/
 	cp .pio/build/lakatos/bootloader.bin .pio/build/lakatos/partitions.bin .pio/build/lakatos/firmware.bin build/web-installer/
 	cp .pio/build/updater/firmware.bin build/web-installer/updater.bin
 	cp $(BOOT_APP0) build/web-installer/boot_app0.bin
-	cp build/apps/*.lapp build/apps/native.bin build/web-installer/apps/
-	cp build/apps/*.lapp build/apps/native.bin build/web-installer/fs_root/apps/
-	cp build/subapps/*.sapp build/web-installer/subapps/
-	cp build/subapps/*.sapp build/web-installer/fs_root/subapps/
+	$(PYTHON) tools/gen_nvs.py $(SECRETS) build/web-installer/nvs.bin
 	$(MKLITTLEFS) -c build/web-installer/fs_root -b 4096 -p 256 -s 1769472 build/web-installer/littlefs.bin
 	rm -rf build/web-installer/fs_root
-	$(PYTHON) -c 'import json, os; apps = sorted(f for f in os.listdir("build/web-installer/apps") if f.endswith(".lapp")); open("build/web-installer/apps/apps.json", "w").write(json.dumps(apps, indent=2) + "\n")'
 	@echo "WebSerial installer bundle ready in build/web-installer/"
 
 demo1:

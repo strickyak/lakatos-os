@@ -1126,9 +1126,23 @@ static void drawHomeScreen() {
   drawHomeHeaderBar();
 
   if (gHomeAppCount <= 0) {
+    const int bx = 14, by = 52, bw = 292, bh = 146, br = 14;
+    const uint16_t bubbleBg = 0xA800;
+    tft.fillRoundRect(bx, by, bw, bh, br, bubbleBg);
+    tft.fillTriangle(274, by, 292, by, 304, 28, bubbleBg);
+    tft.drawRoundRect(bx, by, bw, bh, br, TFT_RED);
+    tft.drawLine(275, by, 291, by, bubbleBg);
+    tft.drawLine(274, by, 304, 28, TFT_RED);
+    tft.drawLine(292, by, 304, 28, TFT_RED);
+
     tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tft.drawString("No apps in /{sd,net,flash}/apps", 160, 130, 2);
+    tft.setTextColor(TFT_WHITE, bubbleBg);
+    tft.drawString("No apps have been found.", 160, 76, 2);
+    tft.drawString("Please check your wifi settings", 160, 100, 2);
+    tft.drawString("and net URL and net password", 160, 124, 2);
+    tft.drawString("settings in the Config panel, using", 160, 148, 2);
+    tft.drawString("the triangle at the top right.", 160, 172, 2);
+    tft.setTextDatum(TL_DATUM);
   } else {
 #if LAKATOS_HOME_TEXT_FLOW
     HomeAppWordLayout boxes[kMaxHomeApps];
