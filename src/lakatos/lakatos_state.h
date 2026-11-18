@@ -134,6 +134,7 @@ void runLakatosConfigScreen(bool startInCalibration = false);
 void runLakatosStorageScreen();
 void runLakatosUpdatesScreen();
 void runLakatosAboutScreen();
+void lakatosAutoUpgradeKernelForApp(const char* appPath, int64_t reqVer);
 
 // ---------------------------------------------------------------------------
 // Unified VFS (/flash/..., /sd/..., /net/...) (implemented in lakatos_vfs.cpp)

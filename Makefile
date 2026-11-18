@@ -39,6 +39,12 @@ push-to-net: build-lakatos
 	$(LAKAT) push build/apps/native.bin /net/apps/
 	$(LAKAT) push build/apps/*.lapp /net/apps/
 	$(LAKAT) push build/subapps/*.sapp /net/subapps/
+push-scp-to-net: build-lakatos
+	scp build/apps/lakatos.krn root@pizga.net:/home/highway/superhighway/fs/apps/
+	scp build/apps/native.bin  root@pizga.net:/home/highway/superhighway/fs/apps/
+	scp build/apps/*.lapp  root@pizga.net:/home/highway/superhighway/fs/apps/
+	scp build/subapps/*.sapp  root@pizga.net:/home/highway/superhighway/fs/subapps/
+	ssh root@pizga.net 'chown -R highway /home/highway/superhighway/fs/'
 
 lakat:
 	mkdir -p build build/flash build/sd build/net

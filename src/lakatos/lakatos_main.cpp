@@ -1511,81 +1511,6 @@ static void refreshActiveScreen() {
 
 static uint32_t gLastHomeActivityMs = 0;
 
-static void showKernelUpgradePromptModal(const char* appPath, int64_t reqVer) {
-  int64_t curVer = lakatosGetKernelVersionSec();
-  {
-    LakatosTftGuard tftGuard;
-    tft.fillRoundRect(14, 34, 292, 174, 6, 0x0843);
-    tft.drawRoundRect(14, 34, 292, 174, 6, TFT_RED);
-    tft.fillRoundRect(16, 36, 288, 22, 4, TFT_MAROON);
-
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(TFT_YELLOW, TFT_MAROON);
-    tft.drawString("KERNEL UPGRADE REQUIRED", 160, 47, 2);
-
-    tft.setTextDatum(TL_DATUM);
-    tft.setTextColor(TFT_WHITE, 0x0843);
-    tft.drawString("This app requires a newer kernel:", 24, 66, 2);
-
-    tft.setTextColor(TFT_CYAN, 0x0843);
-    tft.drawString(appPath, 24, 86, 2);
-
-    char buf[64];
-    snprintf(buf, sizeof(buf), "Required: %lld", (long long)reqVer);
-    tft.setTextColor(TFT_YELLOW, 0x0843);
-    tft.drawString(buf, 24, 112, 2);
-
-    snprintf(buf, sizeof(buf), "Running:  %lld", (long long)curVer);
-    tft.setTextColor(TFT_ORANGE, 0x0843);
-    tft.drawString(buf, 24, 132, 2);
-
-    tft.setTextColor(TFT_SILVER, 0x0843);
-    tft.drawString("Upgrade kernel in Home -> Updates?", 24, 152, 1);
-
-    tft.fillRoundRect(24, 172, 142, 28, 4, TFT_DARKGREEN);
-    tft.drawRoundRect(24, 172, 142, 28, 4, TFT_WHITE);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(TFT_WHITE, TFT_DARKGREEN);
-    tft.drawString("OPEN UPDATES", 95, 186, 2);
-
-    tft.fillRoundRect(178, 172, 118, 28, 4, 0x3186);
-    tft.drawRoundRect(178, 172, 118, 28, 4, TFT_WHITE);
-    tft.setTextColor(TFT_WHITE, 0x3186);
-    tft.drawString("CANCEL", 237, 186, 2);
-    tft.setTextDatum(TL_DATUM);
-  }
-
-  lakatosWaitTouchRelease();
-  while (true) {
-    updateLakatosConfigBackground();
-    lakatosUpdateRgbLed();
-    if (Serial.available()) {
-      return;
-    }
-    LakatosTouchSample ts = lakatosReadTouch();
-    if (ts.touched) {
-      int tx = ts.x;
-      int ty = ts.y;
-      lakatosWaitTouchRelease();
-      if (ty >= 170 && ty <= 202) {
-        if (tx >= 22 && tx <= 168) {
-          lakatosDevLogf("Modal: OPEN UPDATES (%d,%d)", tx, ty);
-          runLakatosUpdatesScreen();
-          return;
-        }
-        if (tx >= 176 && tx <= 298) {
-          lakatosDevLogf("Modal: CANCEL (%d,%d)", tx, ty);
-          return;
-        }
-      }
-      if (ty < 24 && tx < 24) {
-        return;
-      }
-    }
-    delay(20);
-  }
-}
-
 static void launchAppAndRestoreShell(const char* appPath) {
   lakatosDevLogf("Launch App: %s", appPath);
   lakatosSetRgbLed(false, false, true, 250);
@@ -1606,7 +1531,7 @@ static void launchAppAndRestoreShell(const char* appPath) {
     lakatosSetRgbLed(true, false, false, 400);
     if (errMsg.startsWith("NEEDS_KERNEL:")) {
       int64_t reqVer = atoll(errMsg.c_str() + 13);
-      showKernelUpgradePromptModal(appPath, reqVer);
+      lakatosAutoUpgradeKernelForApp(appPath, reqVer);
       gLastHomeActivityMs = millis();
     }
   }
@@ -1682,6 +1607,14 @@ static void stepAmbientMode() {
   String errMsg;
   bool ok = lakatosRunAppFromFile(appPath, &exitCode, &errMsg);
   lakatosWaitTouchRelease();
+
+  if (!ok) {
+    Serial.printf("[Lakatos] Ambient app '%s' launch failed: %s\r\n", appPath, errMsg.c_str());
+    if (errMsg.startsWith("NEEDS_KERNEL:")) {
+      int64_t reqVer = atoll(errMsg.c_str() + 13);
+      lakatosAutoUpgradeKernelForApp(appPath, reqVer);
+    }
+  }
 
   if (!ok || lakatosWasAppExitedByUser() || Serial.available() > 0) {
     lakatosSetActivityMode(LAKATOS_MODE_ACTIVE);
@@ -1770,6 +1703,14 @@ static void stepDemoMode() {
   String errMsg;
   bool ok = lakatosRunAppFromFile(appPath, &exitCode, &errMsg);
   lakatosWaitTouchRelease();
+
+  if (!ok) {
+    Serial.printf("[Lakatos] Demo app '%s' launch failed: %s\r\n", appPath, errMsg.c_str());
+    if (errMsg.startsWith("NEEDS_KERNEL:")) {
+      int64_t reqVer = atoll(errMsg.c_str() + 13);
+      lakatosAutoUpgradeKernelForApp(appPath, reqVer);
+    }
+  }
 
   if (!ok || lakatosWasAppExitedByUser() || Serial.available() > 0) {
     lakatosSetActivityMode(LAKATOS_MODE_ACTIVE);
