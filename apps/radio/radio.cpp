@@ -88,6 +88,13 @@ static const RadioPreset kPresets[] = {
     "http://playerservices.streamtheworld.com/api/livestream-redirect/WRVOHD2.mp3"
   },
   {
+    "KCRW",
+    "KCRW 89.9 FM",
+    "Santa Monica College - Santa Monica, CA",
+    "http://streams.kcrw.com/kcrw_mp3",
+    nullptr
+  },
+  {
     "BBC",
     "BBC World Service",
     "BBC Broadcasting House - London, UK",
@@ -95,7 +102,7 @@ static const RadioPreset kPresets[] = {
     nullptr
   },
 };
-static constexpr int kNumPresets = 8;
+static constexpr int kNumPresets = 9;
 
 // ---------------------------------------------------------------------------
 // Audio & Network Ring Buffers
